@@ -10,6 +10,8 @@ year-progress bar, memento-mori life bar, week-start toggle, right-click
 format cycling, middle-click timezone picker) still works exactly the same;
 this plugin only adds the lunar layer on top.
 
+![Calendar popup](screenshots/calendar.png)
+
 ## Features
 
 - Lunar date and jieqi shown under the solar date, both in the bar's popup
@@ -25,6 +27,11 @@ this plugin only adds the lunar layer on top.
     Monday-first and Sunday-first week (same toggle the "W" column header
     already offered, just made visible as an explicit option).
   - **Show solar terms** — toggles the jieqi caption on/off.
+
+<p float="left">
+  <img src="screenshots/options.png" alt="Options panel" width="320" />
+  <img src="screenshots/languages.png" alt="Language dropdown" width="320" />
+</p>
 
 ## What this plugin does *not* do
 
