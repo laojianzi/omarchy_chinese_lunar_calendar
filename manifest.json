@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "garyliu.lunar-calendar",
+  "name": "Lunar Calendar",
+  "version": "1.0.0",
+  "author": "Gary Liu",
+  "license": "MIT",
+  "description": "Date/time label with a Chinese lunar calendar popup: lunar date and jieqi (24 solar terms)",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Lunar Calendar",
+    "description": "Date/time label with a Chinese lunar calendar popup",
+    "category": "Time",
+    "allowMultiple": false
+  }
+}
