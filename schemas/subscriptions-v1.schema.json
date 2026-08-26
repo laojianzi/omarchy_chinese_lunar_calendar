@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GaryLiuGTA/omarchy_chinese_lunar_calendar/schemas/subscriptions-v1.schema.json",
+  "title": "Omarchy lunar calendar subscriptions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sources"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "autoUpdate": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable periodic background stale-data checks."
+    },
+    "refreshOnStartup": {
+      "type": "boolean",
+      "default": true,
+      "description": "Check stale sources shortly after Omarchy Shell starts."
+    },
+    "refreshOnOpen": {
+      "type": "boolean",
+      "default": true,
+      "description": "Check stale sources when the calendar popup opens."
+    },
+    "checkIntervalMinutes": {
+      "type": "number",
+      "minimum": 15,
+      "maximum": 1440,
+      "default": 60,
+      "description": "How often the shell asks the helper to check sources. Each source refreshHours still prevents unnecessary downloads."
+    },
+    "sources": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "adapter"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "enabled": { "type": "boolean", "default": true },
+          "adapter": { "enum": ["holiday-cn-json", "calendar-feed-v1"] },
+          "url": {
+            "type": "string",
+            "maxLength": 4096,
+            "pattern": "^(https|file)://"
+          },
+          "urlTemplate": {
+            "type": "string",
+            "maxLength": 4096,
+            "pattern": "^(https|file)://.*\\{year\\}"
+          },
+          "refreshHours": { "type": "number", "minimum": 0.1, "maximum": 8760 },
+          "priority": { "type": "number", "minimum": -10000, "maximum": 10000 }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "adapter": { "const": "holiday-cn-json" } } },
+            "then": { "required": ["urlTemplate"] },
+            "else": { "required": ["url"] }
+          }
+        ]
+      }
+    }
+  }
+}

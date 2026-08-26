@@ -3,6 +3,8 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "subscriptions/Projection.js" as Projection
+import "components" as Components
 
 // The lunar calendar's popup: a month grid with ISO week numbers, a lunar
 // date + jieqi readout under the hero date, and small wrappable lunar/jieqi
@@ -21,6 +23,7 @@ Panel {
 
   property var anchorItem: null
   property var hostWidget: null
+  property var subscriptionStore: null
   readonly property var barIdentity: hostWidget || root
 
   // ---- Today.
@@ -46,22 +49,41 @@ Panel {
   readonly property int weekStart: Model.normalizedWeekStart(setting("weekStartDay", null), Qt.locale().firstDayOfWeek)
   readonly property string nextWeekStartLabel: Qt.locale().dayName(Model.toggledWeekStart(weekStart), Locale.LongFormat)
   readonly property var weekdays: Model.weekdayOrder(weekStart)
-  readonly property var weeks: Model.monthGrid(viewYear, viewMonth, weekStart, todayKey)
 
   // ---- Lunar calendar options.
   readonly property string language: Model.normalizedLanguage(setting("language", null), Model.defaultLanguage(Qt.locale().name))
   readonly property bool showJieqi: setting("showJieqi", true) !== false
+  readonly property bool showSubscriptions: setting("showSubscriptions", true) !== false
   readonly property var langCfg: Model.langConfig(root.language)
   property bool showingOptions: false
+  property bool showingDayDetails: false
+  property bool showingSubscriptionSettings: false
+  property string selectedDayKey: ""
+  property var selectedDay: null
+
+  // The store replaces the entire snapshot object after an atomic file update,
+  // so this binding re-projects the month without exposing transport concerns
+  // to individual day delegates.
+  readonly property var subscriptionSnapshot: showSubscriptions && subscriptionStore
+    ? subscriptionStore.snapshot
+    : ({ schemaVersion: 1, byDate: {} })
+  readonly property var weeks: Projection.projectWeeks(
+      Model.monthGrid(viewYear, viewMonth, weekStart, todayKey),
+      root.subscriptionSnapshot,
+      root.language,
+      root.showJieqi,
+      Model
+    )
+
+  onWeeksChanged: {
+    if (!root.showingDayDetails || !root.selectedDayKey) return
+    var refreshed = root.findProjectedDay(root.selectedDayKey)
+    if (refreshed) root.selectedDay = refreshed
+  }
 
   readonly property var todayLunarInfo: Model.computeLunarInfo(today.getFullYear(), today.getMonth() + 1, today.getDate())
   readonly property string lunarHeroText: Model.lunarHeroLabel(todayLunarInfo, root.language)
   readonly property string jieqiHeroText: root.showJieqi ? Model.jieqiLabel(todayLunarInfo, root.language) : ""
-
-  function cellCaption(cell) {
-    var info = Model.computeLunarInfo(cell.year, cell.month + 1, cell.day)
-    return Model.lunarCellCaption(info, root.language, root.showJieqi)
-  }
 
   readonly property color contentForeground: bar ? bar.foreground : Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
@@ -70,13 +92,14 @@ Panel {
   // English labels ("Awakening of Insects") wrap inside their own cell
   // instead of overlapping the neighboring day.
   readonly property int cellWidth: Style.space(64)
-  readonly property int cellHeight: Style.space(54)
+  readonly property int cellHeight: Style.space(60)
   readonly property int cellSpacing: Style.space(2)
   readonly property int weekColumnWidth: Style.space(32)
   readonly property int gutterWidth: Style.space(14)
 
   function open() {
     refresh()
+    if (root.subscriptionStore) root.subscriptionStore.refreshIfStale("open")
     root.controller.show()
     Qt.callLater(function() {
       if (root.opened) setCenterHoverRevealSuppressed(true)
@@ -87,6 +110,8 @@ Panel {
     setCenterHoverRevealSuppressed(false)
     if (root.editingLife) root.cancelEditingLife()
     if (root.showingOptions) root.closeOptions()
+    if (root.showingDayDetails) root.closeDayDetails()
+    if (root.showingSubscriptionSettings) root.closeSubscriptionSettings()
     root.controller.hide()
   }
 
@@ -210,6 +235,47 @@ Panel {
     persistSettings({ showJieqi: !!value })
   }
 
+  function setShowSubscriptions(value) {
+    persistSettings({ showSubscriptions: !!value })
+  }
+
+  function openSubscriptionSettings() {
+    root.showingOptions = false
+    root.showingSubscriptionSettings = true
+    Qt.callLater(function() {
+      if (subscriptionSettingsOverlay) subscriptionSettingsOverlay.resetFromStore()
+      if (subscriptionSettingsFocus) subscriptionSettingsFocus.forceActiveFocus()
+    })
+  }
+
+  function closeSubscriptionSettings() {
+    root.showingSubscriptionSettings = false
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
+
+  function findProjectedDay(key) {
+    for (var w = 0; w < root.weeks.length; w++) {
+      var days = root.weeks[w].days || []
+      for (var d = 0; d < days.length; d++)
+        if (days[d].key === key) return days[d]
+    }
+    return null
+  }
+
+  function openDayDetails(day) {
+    root.selectedDayKey = day ? String(day.key || "") : ""
+    root.selectedDay = day
+    root.showingDayDetails = day !== null
+    Qt.callLater(function() { if (dayDetailsFocus) dayDetailsFocus.forceActiveFocus() })
+  }
+
+  function closeDayDetails() {
+    root.showingDayDetails = false
+    root.selectedDayKey = ""
+    root.selectedDay = null
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
+
   function weekdayLabel(weekday) {
     return String(Qt.locale().dayName(weekday, Locale.ShortFormat)).replace(/\.$/, "").toUpperCase()
   }
@@ -239,7 +305,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editingLife || root.showingOptions
+      blocked: root.editingLife || root.showingOptions || root.showingDayDetails || root.showingSubscriptionSettings
       onMoveRequested: function(dx, dy) {
         if (dx !== 0) root.moveMonth(dx)
         if (dy !== 0) root.moveYear(dy)
@@ -670,49 +736,14 @@ Panel {
                   Repeater {
                     model: modelData.days
 
-                    Rectangle {
+                    Components.DayCell {
                       required property var modelData
-
-                      readonly property string caption: root.cellCaption(modelData)
-
-                      width: root.cellWidth
-                      height: root.cellHeight
-                      radius: Style.cornerRadius
-                      color: "transparent"
-                      border.width: modelData.today ? Style.spacing.hairline : 0
-                      border.color: Style.normalBorderFor(root.contentForeground, Color.accent)
-
-                      Column {
-                        anchors.centerIn: parent
-                        width: parent.width - Style.space(4)
-                        spacing: Style.space(1)
-
-                        Text {
-                          width: parent.width
-                          horizontalAlignment: Text.AlignHCenter
-                          text: modelData.day
-                          color: modelData.inMonth
-                            ? (modelData.weekend ? Qt.darker(root.contentForeground, 1.45) : root.contentForeground)
-                            : Qt.darker(root.contentForeground, 2.2)
-                          font.family: root.contentFontFamily
-                          font.pixelSize: Style.font.body
-                          font.bold: modelData.today
-                        }
-
-                        Text {
-                          width: parent.width
-                          horizontalAlignment: Text.AlignHCenter
-                          wrapMode: Text.WordWrap
-                          maximumLineCount: 2
-                          elide: Text.ElideRight
-                          text: caption
-                          color: modelData.inMonth
-                            ? Qt.darker(root.contentForeground, 1.7)
-                            : Qt.darker(root.contentForeground, 2.4)
-                          font.family: root.contentFontFamily
-                          font.pixelSize: Math.max(8, Style.font.caption - 1)
-                        }
-                      }
+                      day: modelData
+                      foreground: root.contentForeground
+                      fontFamily: root.contentFontFamily
+                      cellWidth: root.cellWidth
+                      cellHeight: root.cellHeight
+                      onActivated: function(day) { root.openDayDetails(day) }
                     }
                   }
                 }
@@ -777,6 +808,56 @@ Panel {
             }
           }
         }
+      }
+    }
+
+    Item {
+      id: dayDetailsFocus
+      anchors.fill: parent
+      z: 30
+      focus: root.showingDayDetails
+      visible: root.showingDayDetails
+
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape) {
+          root.closeDayDetails()
+          event.accepted = true
+        }
+      }
+
+      Components.DayDetailsOverlay {
+        anchors.fill: parent
+        day: root.selectedDay
+        language: root.language
+        foreground: root.contentForeground
+        fontFamily: root.contentFontFamily
+        onCloseRequested: root.closeDayDetails()
+      }
+    }
+
+    Item {
+      id: subscriptionSettingsFocus
+      anchors.fill: parent
+      z: 40
+      focus: root.showingSubscriptionSettings
+      visible: root.showingSubscriptionSettings
+
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape) {
+          root.closeSubscriptionSettings()
+          event.accepted = true
+        }
+      }
+
+      Components.SubscriptionSettingsOverlay {
+        id: subscriptionSettingsOverlay
+        anchors.fill: parent
+        visible: root.showingSubscriptionSettings
+        store: root.subscriptionStore
+        language: root.language
+        foreground: root.contentForeground
+        fontFamily: root.contentFontFamily
+        onCloseRequested: root.closeSubscriptionSettings()
       }
     }
 
@@ -869,6 +950,65 @@ Panel {
               foreground: root.contentForeground
               fontFamily: root.contentFontFamily
               onClicked: root.setShowJieqi(!root.showJieqi)
+            }
+
+            Toggle {
+              width: parent.width
+              label: root.language === "en" ? "Show subscriptions" : (root.language === "zh-Hant" ? "顯示訂閱資料" : "显示订阅数据")
+              description: root.language === "en"
+                ? "Render work schedules, festivals, and events from the typed snapshot"
+                : (root.language === "zh-Hant" ? "顯示班休、節日與事件" : "显示班休、节日与事件")
+              checked: root.showSubscriptions
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: root.setShowSubscriptions(!root.showSubscriptions)
+            }
+
+            Button {
+              width: parent.width
+              text: root.language === "en" ? "Manage subscriptions" : (root.language === "zh-Hant" ? "管理訂閱" : "管理订阅")
+              iconText: "󰌹"
+              tooltipText: root.language === "en"
+                ? "Add, edit, disable, or remove subscription sources"
+                : (root.language === "zh-Hant" ? "新增、編輯、停用或移除訂閱來源" : "添加、编辑、停用或删除订阅源")
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              focusable: true
+              bordered: true
+              leftAlign: true
+              onClicked: root.openSubscriptionSettings()
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                width: parent.width - refreshSubscriptionsButton.width - parent.spacing
+                wrapMode: Text.WordWrap
+                text: {
+                  if (!root.subscriptionStore) return root.language === "en" ? "Subscription store unavailable" : "订阅存储不可用"
+                  if (root.subscriptionStore.syncing) return root.language === "en" ? "Refreshing subscriptions…" : "正在刷新订阅…"
+                  if (root.subscriptionStore.lastError) return root.subscriptionStore.lastError
+                  if (root.subscriptionStore.sourceWarning) return root.subscriptionStore.sourceWarning
+                  return root.subscriptionStore.lastLoadedAt
+                    ? ((root.language === "en" ? "Snapshot: " : "数据快照：") + root.subscriptionStore.lastLoadedAt)
+                    : (root.language === "en" ? "No snapshot loaded yet" : "尚未加载订阅快照")
+                }
+                color: Qt.darker(root.contentForeground, 1.5)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              PanelActionButton {
+                id: refreshSubscriptionsButton
+                iconText: "󰑐"
+                tooltipText: root.language === "en" ? "Refresh subscriptions" : "刷新订阅"
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                enabled: root.subscriptionStore !== null && !root.subscriptionStore.syncing
+                onClicked: if (root.subscriptionStore) root.subscriptionStore.refresh(true)
+              }
             }
           }
         }

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "records": [
+    {
+      "id": "mid-autumn",
+      "kind": "festival",
+      "title": "中秋节",
+      "priority": 80,
+      "span": {"mode":"date","start":"2026-09-25","endExclusive":"2026-09-26"},
+      "payload": {"festivalId":"cn.mid-autumn-festival"}
+    },
+    {
+      "id": "review",
+      "kind": "event",
+      "title": "项目评审",
+      "span": {"mode":"datetime","start":"2026-09-25T09:00:00+08:00","end":"2026-09-25T10:00:00+08:00"},
+      "payload": {"uid":"review-1"}
+    }
+  ]
+}

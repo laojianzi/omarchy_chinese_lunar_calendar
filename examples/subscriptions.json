@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "autoUpdate": true,
+  "refreshOnStartup": true,
+  "refreshOnOpen": true,
+  "checkIntervalMinutes": 60,
+  "sources": [
+    {
+      "id": "cn-official",
+      "name": "中国法定节假日",
+      "enabled": true,
+      "adapter": "holiday-cn-json",
+      "urlTemplate": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json",
+      "refreshHours": 24,
+      "priority": 100
+    },
+    {
+      "id": "my-typed-feed",
+      "name": "My typed calendar feed",
+      "enabled": false,
+      "adapter": "calendar-feed-v1",
+      "url": "https://example.invalid/calendar-feed-v1.json",
+      "refreshHours": 6,
+      "priority": 20
+    }
+  ]
+}
