@@ -41,11 +41,12 @@ Rectangle {
 
   function dateColor() {
     if (!day.inMonth) return Qt.darker(root.foreground, 2.2)
-    var type = day.presentation ? day.presentation.effectiveDayType : (day.weekend ? "weekend" : "weekday")
-    if (type === "official-off" || type === "weekend-off") return root.restColor
-    if (type === "makeup-work") return root.workColor
+    var type = day.presentation ? day.presentation.effectiveDayType : "weekday"
+    if (type === "regular-rest" || type === "scheduled-rest" || type === "official-off")
+      return root.restColor
+    if (type === "makeup-work" || type === "scheduled-work") return root.workColor
     if (type === "schedule-conflict") return root.conflictColor
-    return type === "weekend" ? Qt.darker(root.foreground, 1.45) : root.foreground
+    return root.foreground
   }
 
   Column {
@@ -60,7 +61,7 @@ Rectangle {
       color: root.dateColor()
       font.family: root.fontFamily
       font.pixelSize: Style.font.body
-      font.bold: root.day.today || (root.day.presentation && root.day.presentation.effectiveDayType === "makeup-work")
+      font.bold: root.day.today || (root.day.presentation && root.day.presentation.badgeRole === "work")
     }
 
     Text {

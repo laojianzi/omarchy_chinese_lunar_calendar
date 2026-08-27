@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "garyliu.lunar-calendar",
   "name": "Lunar Calendar",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "Gary Liu",
   "license": "MIT",
   "description": "Chinese lunar calendar with typed schedule, festival, and event subscriptions",
@@ -26,8 +26,8 @@
       "subscriptionOfficialEnabled": true,
       "subscriptionOfficialUrlTemplate": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json",
       "subscriptionOfficialRefreshHours": 24,
-      "saturdayIsRest": false,
-      "sundayIsRest": false,
+      "saturdayIsRest": true,
+      "sundayIsRest": true,
       "restBadgeColor": "auto",
       "workBadgeColor": "auto"
     },
@@ -36,22 +36,22 @@
         "key": "showSubscriptions",
         "type": "boolean",
         "label": "Show subscription data",
-        "description": "Render work/rest schedules, subscribed festivals, and events in the calendar.",
+        "description": "Render date-specific schedule overrides, subscribed festivals, and events. The base weekly rest schedule remains active.",
         "defaultValue": true
       },
       {
         "key": "saturdayIsRest",
         "type": "boolean",
-        "label": "Always mark Saturday as rest",
-        "description": "Show 休 on every Saturday. This local rule overrides subscribed 班 records for Saturdays.",
-        "defaultValue": false
+        "label": "Saturday is a regular rest day",
+        "description": "Base weekly schedule. A date-specific subscribed 休 or 班 record takes precedence.",
+        "defaultValue": true
       },
       {
         "key": "sundayIsRest",
         "type": "boolean",
-        "label": "Always mark Sunday as rest",
-        "description": "Show 休 on every Sunday. This local rule overrides subscribed 班 records for Sundays.",
-        "defaultValue": false
+        "label": "Sunday is a regular rest day",
+        "description": "Base weekly schedule. A date-specific subscribed 休 or 班 record takes precedence.",
+        "defaultValue": true
       },
       {
         "key": "restBadgeColor",
