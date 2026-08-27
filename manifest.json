@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "garyliu.lunar-calendar",
   "name": "Lunar Calendar",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Gary Liu",
   "license": "MIT",
   "description": "Chinese lunar calendar with typed schedule, festival, and event subscriptions",

@@ -26,7 +26,7 @@ this plugin adds lunar facts and typed subscription overlays on top.
 - A built-in subscription manager can add, edit, enable, disable, or remove
   sources; configure startup/open/periodic refresh; show source health; and
   trigger an immediate refresh without editing JSON.
-- Options panel (gear icon, top-right of the popup):
+- Top-right actions expose **Subscriptions** directly and keep general options under the gear:
   - **Language** — Simplified Chinese, Traditional Chinese, or English.
     Defaults to whatever your system locale implies (`zh_CN`-family ->
     Simplified, `zh_TW`/`zh_HK`/`zh_MO` -> Traditional, otherwise English).
@@ -34,7 +34,8 @@ this plugin adds lunar facts and typed subscription overlays on top.
     Monday-first and Sunday-first week (same toggle the "W" column header
     already offered, just made visible as an explicit option).
   - **Show solar terms** — toggles the jieqi caption on/off.
-  - **Manage subscriptions** — opens the source and automatic-update settings.
+  - **Subscriptions** — the link icon opens source URLs and automatic-update settings directly.
+  - **Manage subscriptions** — the same entry is pinned at the top of the gear menu.
 
 <p float="left">
   <img src="screenshots/options.png" alt="Options panel" width="320" />
@@ -58,13 +59,13 @@ event titles are never guessed to mean `休` or `班`.
 ## Installation
 
 ```
-omarchy plugin add https://github.com/GaryLiuGTA/omarchy_chinese_lunar_calendar.git --enable
+omarchy plugin add https://github.com/laojianzi/omarchy_chinese_lunar_calendar.git --enable
 ```
 
 Or clone and edit locally:
 
 ```
-git clone https://github.com/GaryLiuGTA/omarchy_chinese_lunar_calendar.git \
+git clone https://github.com/laojianzi/omarchy_chinese_lunar_calendar.git \
   ~/.config/omarchy/plugins/garyliu.lunar-calendar
 omarchy plugin enable garyliu.lunar-calendar --section center
 ```
@@ -72,6 +73,28 @@ omarchy plugin enable garyliu.lunar-calendar --section center
 The manifest declares this widget as a replacement for `omarchy.clock`, so
 Omarchy preserves the clock's bar position and routes the existing calendar
 shortcut to this plugin when it is enabled.
+
+### Subscription controls are missing
+
+Earlier documentation pointed at the original upstream repository, which does
+not contain this fork's subscription UI. Verify the installed checkout:
+
+```bash
+git -C ~/.config/omarchy/plugins/garyliu.lunar-calendar remote get-url origin
+git -C ~/.config/omarchy/plugins/garyliu.lunar-calendar rev-parse --short HEAD
+```
+
+The origin should be `laojianzi/omarchy_chinese_lunar_calendar`. To switch an
+existing checkout and update it:
+
+```bash
+git -C ~/.config/omarchy/plugins/garyliu.lunar-calendar remote set-url origin \
+  https://github.com/laojianzi/omarchy_chinese_lunar_calendar.git
+omarchy plugin update garyliu.lunar-calendar --yes
+```
+
+Reopen the panel after the plugin reload. A link icon appears beside the gear,
+and the gear menu starts with **Subscriptions and automatic updates**.
 
 ## Removal
 
@@ -99,8 +122,9 @@ festivals, and events. Generic ICS is intentionally not guessed from event
 summaries; it should be added through a dedicated adapter that preserves UID,
 recurrence, time-zone, and all-day semantics.
 
-Open the calendar, click the gear, and select **Manage subscriptions**. The
-settings UI supports:
+Open the calendar and click the **Subscriptions** link icon in the top-right.
+The same entry is pinned at the top of the gear menu, and `S` opens it from
+the keyboard. The settings UI supports:
 
 - the built-in China statutory holiday preset;
 - custom `calendar-feed-v1` HTTPS or local-file addresses;

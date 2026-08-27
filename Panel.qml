@@ -320,6 +320,7 @@ Panel {
         else if (t === "}") root.moveYear(1)
         else if (t === "t" || t === "T") root.goToToday()
         else if (t === "w" || t === "W") root.toggleWeekStart()
+        else if (t === "s" || t === "S") root.openSubscriptionSettings()
         else if (t === "o" || t === "O") root.openOptions()
       }
 
@@ -389,16 +390,30 @@ Panel {
               }
             }
 
-            PanelActionButton {
+            Row {
               anchors.right: parent.right
               anchors.top: parent.top
               anchors.rightMargin: -Style.space(4)
               anchors.topMargin: -Style.space(2)
-              iconText: "⚙"
-              tooltipText: root.langCfg.optionsButtonTooltip
-              foreground: root.contentForeground
-              fontFamily: root.contentFontFamily
-              onClicked: root.openOptions()
+              spacing: Style.space(4)
+
+              PanelActionButton {
+                iconText: "󰌹"
+                tooltipText: root.language === "en"
+                  ? "Manage subscriptions"
+                  : (root.language === "zh-Hant" ? "管理訂閱" : "管理订阅")
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.openSubscriptionSettings()
+              }
+
+              PanelActionButton {
+                iconText: "⚙"
+                tooltipText: root.langCfg.optionsButtonTooltip
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.openOptions()
+              }
             }
           }
 
@@ -861,7 +876,8 @@ Panel {
       }
     }
 
-    // ---- Options overlay: language + week-start + jieqi toggles.
+    // ---- Options overlay. Subscription management is deliberately the
+    //      first action, and the card scrolls on shorter displays.
     Item {
       id: optionsOverlay
       anchors.fill: parent
@@ -885,14 +901,18 @@ Panel {
           if (event.key === Qt.Key_Escape) {
             root.closeOptions()
             event.accepted = true
+          } else if (event.key === Qt.Key_S) {
+            root.openSubscriptionSettings()
+            event.accepted = true
           }
         }
 
         BorderSurface {
           id: optionsCard
           anchors.centerIn: parent
-          width: Math.min(parent.width - Style.space(32), Style.space(320))
-          height: optionsColumn.implicitHeight + contentTopInset + contentBottomInset
+          width: Math.min(parent.width - Style.space(24), Style.space(380))
+          height: Math.min(parent.height - Style.space(24),
+                           optionsColumn.implicitHeight + contentTopInset + contentBottomInset)
           color: Color.popups.background
           borderSpec: Border.flat(Color.popups.border, Style.normalBorderWidth)
           radius: Style.cornerRadius
@@ -900,114 +920,144 @@ Panel {
 
           MouseArea { anchors.fill: parent; onClicked: {} }
 
-          Column {
-            id: optionsColumn
+          Flickable {
+            id: optionsScroll
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
+            anchors.bottom: parent.bottom
             anchors.topMargin: optionsCard.contentTopInset
             anchors.leftMargin: optionsCard.contentLeftInset
             anchors.rightMargin: optionsCard.contentRightInset
-            spacing: Style.space(14)
+            anchors.bottomMargin: optionsCard.contentBottomInset
+            contentWidth: width
+            contentHeight: optionsColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
 
-            Text {
-              text: root.langCfg.optionsTitle
-              color: root.contentForeground
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.title
-              font.bold: true
-            }
-
-            Dropdown {
-              width: parent.width
-              label: root.langCfg.languageLabel
-              value: root.language
-              options: [
-                { value: "zh-Hans", label: "简体中文" },
-                { value: "zh-Hant", label: "繁體中文" },
-                { value: "en", label: "English" }
-              ]
-              foreground: root.contentForeground
-              fontFamily: root.contentFontFamily
-              onChanged: function(v) { root.setLanguage(v) }
-            }
-
-            Toggle {
-              width: parent.width
-              label: root.langCfg.weekStartToggleLabel
-              description: root.langCfg.weekStartToggleDesc
-              checked: root.weekStart === 1
-              foreground: root.contentForeground
-              fontFamily: root.contentFontFamily
-              onClicked: root.toggleWeekStart()
-            }
-
-            Toggle {
-              width: parent.width
-              label: root.langCfg.jieqiToggleLabel
-              description: root.langCfg.jieqiToggleDesc
-              checked: root.showJieqi
-              foreground: root.contentForeground
-              fontFamily: root.contentFontFamily
-              onClicked: root.setShowJieqi(!root.showJieqi)
-            }
-
-            Toggle {
-              width: parent.width
-              label: root.language === "en" ? "Show subscriptions" : (root.language === "zh-Hant" ? "顯示訂閱資料" : "显示订阅数据")
-              description: root.language === "en"
-                ? "Render work schedules, festivals, and events from the typed snapshot"
-                : (root.language === "zh-Hant" ? "顯示班休、節日與事件" : "显示班休、节日与事件")
-              checked: root.showSubscriptions
-              foreground: root.contentForeground
-              fontFamily: root.contentFontFamily
-              onClicked: root.setShowSubscriptions(!root.showSubscriptions)
-            }
-
-            Button {
-              width: parent.width
-              text: root.language === "en" ? "Manage subscriptions" : (root.language === "zh-Hant" ? "管理訂閱" : "管理订阅")
-              iconText: "󰌹"
-              tooltipText: root.language === "en"
-                ? "Add, edit, disable, or remove subscription sources"
-                : (root.language === "zh-Hant" ? "新增、編輯、停用或移除訂閱來源" : "添加、编辑、停用或删除订阅源")
-              foreground: root.contentForeground
-              fontFamily: root.contentFontFamily
-              focusable: true
-              bordered: true
-              leftAlign: true
-              onClicked: root.openSubscriptionSettings()
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(6)
+            Column {
+              id: optionsColumn
+              width: optionsScroll.width
+              spacing: Style.space(12)
 
               Text {
-                width: parent.width - refreshSubscriptionsButton.width - parent.spacing
+                text: root.langCfg.optionsTitle
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+
+              Button {
+                width: parent.width
+                text: root.language === "en"
+                  ? "Subscriptions and automatic updates"
+                  : (root.language === "zh-Hant" ? "訂閱與自動更新" : "订阅与自动更新")
+                iconText: "󰌹"
+                tooltipText: root.language === "en"
+                  ? "Add subscription URLs and configure update policy"
+                  : (root.language === "zh-Hant" ? "新增訂閱地址並設定更新策略" : "添加订阅地址并配置更新策略")
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                focusable: true
+                selected: true
+                bordered: true
+                leftAlign: true
+                onClicked: root.openSubscriptionSettings()
+              }
+
+              Text {
+                width: parent.width
                 wrapMode: Text.WordWrap
-                text: {
-                  if (!root.subscriptionStore) return root.language === "en" ? "Subscription store unavailable" : "订阅存储不可用"
-                  if (root.subscriptionStore.syncing) return root.language === "en" ? "Refreshing subscriptions…" : "正在刷新订阅…"
-                  if (root.subscriptionStore.lastError) return root.subscriptionStore.lastError
-                  if (root.subscriptionStore.sourceWarning) return root.subscriptionStore.sourceWarning
-                  return root.subscriptionStore.lastLoadedAt
-                    ? ((root.language === "en" ? "Snapshot: " : "数据快照：") + root.subscriptionStore.lastLoadedAt)
-                    : (root.language === "en" ? "No snapshot loaded yet" : "尚未加载订阅快照")
-                }
-                color: Qt.darker(root.contentForeground, 1.5)
+                text: root.language === "en"
+                  ? "Configure China holiday data, typed calendar feeds, refresh intervals, startup/open refresh, and manual updates. Shortcut: S."
+                  : (root.language === "zh-Hant"
+                    ? "設定中國班休、類型化日曆訂閱、更新週期、啟動/開啟時更新與手動重新整理。快捷鍵：S。"
+                    : "配置中国班休、类型化日历订阅、更新周期、启动/打开时更新与手动刷新。快捷键：S。")
+                color: Qt.darker(root.contentForeground, 1.45)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
               }
 
-              PanelActionButton {
-                id: refreshSubscriptionsButton
-                iconText: "󰑐"
-                tooltipText: root.language === "en" ? "Refresh subscriptions" : "刷新订阅"
+              PanelSeparator { foreground: root.contentForeground }
+
+              Dropdown {
+                width: parent.width
+                label: root.langCfg.languageLabel
+                value: root.language
+                options: [
+                  { value: "zh-Hans", label: "简体中文" },
+                  { value: "zh-Hant", label: "繁體中文" },
+                  { value: "en", label: "English" }
+                ]
                 foreground: root.contentForeground
                 fontFamily: root.contentFontFamily
-                enabled: root.subscriptionStore !== null && !root.subscriptionStore.syncing
-                onClicked: if (root.subscriptionStore) root.subscriptionStore.refresh(true)
+                onChanged: function(v) { root.setLanguage(v) }
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.langCfg.weekStartToggleLabel
+                description: root.langCfg.weekStartToggleDesc
+                checked: root.weekStart === 1
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.toggleWeekStart()
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.langCfg.jieqiToggleLabel
+                description: root.langCfg.jieqiToggleDesc
+                checked: root.showJieqi
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setShowJieqi(!root.showJieqi)
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Show subscriptions" : (root.language === "zh-Hant" ? "顯示訂閱資料" : "显示订阅数据")
+                description: root.language === "en"
+                  ? "Render work schedules, festivals, and events from the typed snapshot"
+                  : (root.language === "zh-Hant" ? "顯示班休、節日與事件" : "显示班休、节日与事件")
+                checked: root.showSubscriptions
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setShowSubscriptions(!root.showSubscriptions)
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+
+                Text {
+                  width: parent.width - refreshSubscriptionsButton.width - parent.spacing
+                  wrapMode: Text.WordWrap
+                  text: {
+                    if (!root.subscriptionStore) return root.language === "en" ? "Subscription store unavailable" : "订阅存储不可用"
+                    if (root.subscriptionStore.syncing) return root.language === "en" ? "Refreshing subscriptions…" : "正在刷新订阅…"
+                    if (root.subscriptionStore.lastError) return root.subscriptionStore.lastError
+                    if (root.subscriptionStore.sourceWarning) return root.subscriptionStore.sourceWarning
+                    return root.subscriptionStore.lastLoadedAt
+                      ? ((root.language === "en" ? "Snapshot: " : "数据快照：") + root.subscriptionStore.lastLoadedAt)
+                      : (root.language === "en" ? "No snapshot loaded yet" : "尚未加载订阅快照")
+                  }
+                  color: Qt.darker(root.contentForeground, 1.5)
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                PanelActionButton {
+                  id: refreshSubscriptionsButton
+                  iconText: "󰑐"
+                  tooltipText: root.language === "en" ? "Refresh subscriptions" : "刷新订阅"
+                  foreground: root.contentForeground
+                  fontFamily: root.contentFontFamily
+                  enabled: root.subscriptionStore !== null && !root.subscriptionStore.syncing
+                  onClicked: if (root.subscriptionStore) root.subscriptionStore.refresh(true)
+                }
               }
             }
           }
