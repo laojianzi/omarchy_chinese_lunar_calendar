@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "garyliu.lunar-calendar",
   "name": "Lunar Calendar",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "Gary Liu",
   "license": "MIT",
   "description": "Chinese lunar calendar with typed schedule, festival, and event subscriptions",
@@ -25,7 +25,11 @@
       "subscriptionCheckIntervalMinutes": 60,
       "subscriptionOfficialEnabled": true,
       "subscriptionOfficialUrlTemplate": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json",
-      "subscriptionOfficialRefreshHours": 24
+      "subscriptionOfficialRefreshHours": 24,
+      "saturdayIsRest": false,
+      "sundayIsRest": false,
+      "restBadgeColor": "auto",
+      "workBadgeColor": "auto"
     },
     "schema": [
       {
@@ -34,6 +38,34 @@
         "label": "Show subscription data",
         "description": "Render work/rest schedules, subscribed festivals, and events in the calendar.",
         "defaultValue": true
+      },
+      {
+        "key": "saturdayIsRest",
+        "type": "boolean",
+        "label": "Always mark Saturday as rest",
+        "description": "Show 休 on every Saturday. This local rule overrides subscribed 班 records for Saturdays.",
+        "defaultValue": false
+      },
+      {
+        "key": "sundayIsRest",
+        "type": "boolean",
+        "label": "Always mark Sunday as rest",
+        "description": "Show 休 on every Sunday. This local rule overrides subscribed 班 records for Sundays.",
+        "defaultValue": false
+      },
+      {
+        "key": "restBadgeColor",
+        "type": "string",
+        "label": "Rest badge color",
+        "description": "Use auto or #RRGGBB. Auto selects an accessible red for the current light or dark theme.",
+        "defaultValue": "auto"
+      },
+      {
+        "key": "workBadgeColor",
+        "type": "string",
+        "label": "Work badge color",
+        "description": "Use auto or #RRGGBB. Auto selects an accessible blue for the current light or dark theme.",
+        "defaultValue": "auto"
       },
       {
         "key": "subscriptionOfficialEnabled",

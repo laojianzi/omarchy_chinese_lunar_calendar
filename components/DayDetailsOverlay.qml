@@ -9,6 +9,9 @@ Item {
   property string language: "zh-Hans"
   required property color foreground
   required property string fontFamily
+  required property color restColor
+  required property color workColor
+  required property color conflictColor
 
   signal closeRequested()
 
@@ -36,6 +39,20 @@ Item {
   function scheduleSourceLine() {
     if (!day || !day.schedule) return ""
     var schedule = day.schedule
+    if (schedule.weekendOverride) {
+      var line = tr("本地周末规则", "本地週末規則", "Local weekend rule")
+      var overridden = schedule.overriddenSchedule
+      if (overridden) {
+        var state = overridden.status === "off"
+          ? tr("休", "休", "off")
+          : overridden.status === "work"
+            ? tr("班", "班", "work")
+            : tr("冲突", "衝突", "conflict")
+        line += tr(" · 已覆盖订阅：", " · 已覆蓋訂閱：", " · Overrides subscribed: ") + state
+        if (overridden.title) line += " · " + overridden.title
+      }
+      return line
+    }
     if (schedule.conflict && schedule.candidates) {
       var parts = []
       for (var i = 0; i < schedule.candidates.length; i++) {
@@ -49,6 +66,13 @@ Item {
     return schedule.sourceId
       ? tr("来源：", "來源：", "Source: ") + schedule.sourceId
       : ""
+  }
+
+  function scheduleColor() {
+    if (!day || !day.schedule) return foreground
+    if (day.schedule.status === "off") return restColor
+    if (day.schedule.status === "work") return workColor
+    return conflictColor
   }
 
   function eventTime(record) {
@@ -163,7 +187,7 @@ Item {
                   : root.tr("来源冲突", "來源衝突", "Source conflict")
               return status + (schedule.title ? " · " + schedule.title : "")
             }
-            color: Style.selectedStateColor(root.foreground, Color.accent)
+            color: root.scheduleColor()
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             font.bold: true

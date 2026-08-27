@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 import "subscriptions/Projection.js" as Projection
+import "subscriptions/PresentationSettings.js" as PresentationSettings
 import "components" as Components
 
 // The lunar calendar's popup: a month grid with ISO week numbers, a lunar
@@ -54,12 +55,25 @@ Panel {
   readonly property string language: Model.normalizedLanguage(setting("language", null), Model.defaultLanguage(Qt.locale().name))
   readonly property bool showJieqi: setting("showJieqi", true) !== false
   readonly property bool showSubscriptions: setting("showSubscriptions", true) !== false
+  readonly property bool saturdayIsRest: setting("saturdayIsRest", false) === true
+  readonly property bool sundayIsRest: setting("sundayIsRest", false) === true
+  readonly property string restBadgeColorSetting: PresentationSettings.normalizeColorSetting(setting("restBadgeColor", "auto"))
+  readonly property string workBadgeColorSetting: PresentationSettings.normalizeColorSetting(setting("workBadgeColor", "auto"))
+  readonly property bool darkPopupTheme: PresentationSettings.isDarkRgb(
+    Color.popups.background.r,
+    Color.popups.background.g,
+    Color.popups.background.b
+  )
+  readonly property color restBadgeFill: PresentationSettings.resolveColor(root.restBadgeColorSetting, "rest", root.darkPopupTheme)
+  readonly property color workBadgeFill: PresentationSettings.resolveColor(root.workBadgeColorSetting, "work", root.darkPopupTheme)
+  readonly property color conflictBadgeFill: PresentationSettings.resolveColor("auto", "conflict", root.darkPopupTheme)
   readonly property var langCfg: Model.langConfig(root.language)
   property bool showingOptions: false
   property bool showingDayDetails: false
   property bool showingSubscriptionSettings: false
   property string selectedDayKey: ""
   property var selectedDay: null
+  property string badgeColorError: ""
 
   // The store replaces the entire snapshot object after an atomic file update,
   // so this binding re-projects the month without exposing transport concerns
@@ -72,6 +86,10 @@ Panel {
       root.subscriptionSnapshot,
       root.language,
       root.showJieqi,
+      ({
+        saturdayIsRest: root.saturdayIsRest,
+        sundayIsRest: root.sundayIsRest
+      }),
       Model
     )
 
@@ -217,7 +235,12 @@ Panel {
   // ---- Options overlay.
   function openOptions() {
     root.showingOptions = true
-    Qt.callLater(function() { if (optionsFocus) optionsFocus.forceActiveFocus() })
+    root.badgeColorError = ""
+    Qt.callLater(function() {
+      if (restBadgeColorField) restBadgeColorField.text = root.restBadgeColorSetting
+      if (workBadgeColorField) workBadgeColorField.text = root.workBadgeColorSetting
+      if (optionsFocus) optionsFocus.forceActiveFocus()
+    })
   }
 
   function closeOptions() {
@@ -237,6 +260,42 @@ Panel {
 
   function setShowSubscriptions(value) {
     persistSettings({ showSubscriptions: !!value })
+  }
+
+  function setSaturdayIsRest(value) {
+    persistSettings({ saturdayIsRest: !!value })
+  }
+
+  function setSundayIsRest(value) {
+    persistSettings({ sundayIsRest: !!value })
+  }
+
+  function badgeColorSetting(key) {
+    return key === "restBadgeColor" ? root.restBadgeColorSetting : root.workBadgeColorSetting
+  }
+
+  function commitBadgeColor(key, field) {
+    var value = String(field ? field.text : "").trim()
+    if (!PresentationSettings.isValidColorSetting(value)) {
+      root.badgeColorError = root.language === "en"
+        ? "Use auto or a #RRGGBB color."
+        : (root.language === "zh-Hant" ? "請輸入 auto 或 #RRGGBB 色彩。" : "请输入 auto 或 #RRGGBB 颜色。")
+      if (field) field.text = root.badgeColorSetting(key)
+      return
+    }
+    var normalized = PresentationSettings.normalizeColorSetting(value)
+    var next = ({})
+    next[key] = normalized
+    root.persistSettings(next)
+    root.badgeColorError = ""
+    if (field) field.text = normalized
+  }
+
+  function resetBadgeColors() {
+    root.persistSettings({ restBadgeColor: "auto", workBadgeColor: "auto" })
+    root.badgeColorError = ""
+    if (restBadgeColorField) restBadgeColorField.text = "auto"
+    if (workBadgeColorField) workBadgeColorField.text = "auto"
   }
 
   function openSubscriptionSettings() {
@@ -762,6 +821,9 @@ Panel {
                       fontFamily: root.contentFontFamily
                       cellWidth: root.cellWidth
                       cellHeight: root.cellHeight
+                      restColor: root.restBadgeFill
+                      workColor: root.workBadgeFill
+                      conflictColor: root.conflictBadgeFill
                       onActivated: function(day) { root.openDayDetails(day) }
                     }
                   }
@@ -850,6 +912,9 @@ Panel {
         language: root.language
         foreground: root.contentForeground
         fontFamily: root.contentFontFamily
+        restColor: root.restBadgeFill
+        workColor: root.workBadgeFill
+        conflictColor: root.conflictBadgeFill
         onCloseRequested: root.closeDayDetails()
       }
     }
@@ -1031,6 +1096,152 @@ Panel {
                 fontFamily: root.contentFontFamily
                 onClicked: root.setShowSubscriptions(!root.showSubscriptions)
               }
+
+              PanelSeparator { foreground: root.contentForeground }
+
+              Text {
+                text: root.language === "en" ? "Work / rest display" : (root.language === "zh-Hant" ? "班休顯示" : "班休显示")
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Saturday is always rest" : (root.language === "zh-Hant" ? "週六固定休息" : "周六固定休息")
+                description: root.language === "en"
+                  ? "Every Saturday shows 休 and overrides a subscribed 班 record."
+                  : (root.language === "zh-Hant" ? "所有週六顯示「休」，並覆蓋訂閱中的「班」。" : "所有周六显示“休”，并覆盖订阅中的“班”。")
+                checked: root.saturdayIsRest
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setSaturdayIsRest(!root.saturdayIsRest)
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Sunday is always rest" : (root.language === "zh-Hant" ? "週日固定休息" : "周日固定休息")
+                description: root.language === "en"
+                  ? "Every Sunday shows 休 and overrides a subscribed 班 record."
+                  : (root.language === "zh-Hant" ? "所有週日顯示「休」，並覆蓋訂閱中的「班」。" : "所有周日显示“休”，并覆盖订阅中的“班”。")
+                checked: root.sundayIsRest
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setSundayIsRest(!root.sundayIsRest)
+              }
+
+              Text {
+                width: parent.width
+                text: root.language === "en"
+                  ? "Badge colors accept auto or #RRGGBB. Auto uses different accessible colors for light and dark themes."
+                  : (root.language === "zh-Hant" ? "角標色彩可填 auto 或 #RRGGBB；auto 會依亮色／暗色主題套用合適預設。" : "角标颜色可填 auto 或 #RRGGBB；auto 会按亮色/暗色主题使用合理默认值。")
+                color: Qt.darker(root.contentForeground, 1.45)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Column {
+                  width: Math.floor((parent.width - parent.spacing) / 2)
+                  spacing: Style.spacing.labelGap
+
+                  Text {
+                    text: root.language === "en" ? "Rest color" : (root.language === "zh-Hant" ? "休色彩" : "休颜色")
+                    color: Qt.darker(root.contentForeground, 1.35)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Rectangle {
+                      width: Style.space(24)
+                      height: Style.space(24)
+                      radius: Style.cornerRadius
+                      color: root.restBadgeFill
+                    }
+
+                    TextField {
+                      id: restBadgeColorField
+                      width: parent.width - Style.space(24) - parent.spacing
+                      placeholderText: "auto"
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      onEditingFinished: root.commitBadgeColor("restBadgeColor", restBadgeColorField)
+                    }
+                  }
+                }
+
+                Column {
+                  width: Math.floor((parent.width - parent.spacing) / 2)
+                  spacing: Style.spacing.labelGap
+
+                  Text {
+                    text: root.language === "en" ? "Work color" : (root.language === "zh-Hant" ? "班色彩" : "班颜色")
+                    color: Qt.darker(root.contentForeground, 1.35)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Rectangle {
+                      width: Style.space(24)
+                      height: Style.space(24)
+                      radius: Style.cornerRadius
+                      color: root.workBadgeFill
+                    }
+
+                    TextField {
+                      id: workBadgeColorField
+                      width: parent.width - Style.space(24) - parent.spacing
+                      placeholderText: "auto"
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      onEditingFinished: root.commitBadgeColor("workBadgeColor", workBadgeColorField)
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Button {
+                  id: automaticBadgeColorsButton
+                  text: root.language === "en" ? "Use automatic colors" : (root.language === "zh-Hant" ? "使用自動配色" : "使用自动配色")
+                  foreground: root.contentForeground
+                  fontFamily: root.contentFontFamily
+                  focusable: true
+                  bordered: true
+                  onClicked: root.resetBadgeColors()
+                }
+
+                Text {
+                  width: parent.width - automaticBadgeColorsButton.width - parent.spacing
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: root.badgeColorError !== ""
+                  text: root.badgeColorError
+                  color: root.conflictBadgeFill
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
+
+              PanelSeparator { foreground: root.contentForeground }
 
               Row {
                 width: parent.width
