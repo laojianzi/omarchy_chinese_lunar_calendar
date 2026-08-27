@@ -55,8 +55,8 @@ Panel {
   readonly property string language: Model.normalizedLanguage(setting("language", null), Model.defaultLanguage(Qt.locale().name))
   readonly property bool showJieqi: setting("showJieqi", true) !== false
   readonly property bool showSubscriptions: setting("showSubscriptions", true) !== false
-  readonly property bool saturdayIsRest: setting("saturdayIsRest", false) === true
-  readonly property bool sundayIsRest: setting("sundayIsRest", false) === true
+  readonly property bool saturdayIsRest: setting("saturdayIsRest", true) !== false
+  readonly property bool sundayIsRest: setting("sundayIsRest", true) !== false
   readonly property string restBadgeColorSetting: PresentationSettings.normalizeColorSetting(setting("restBadgeColor", "auto"))
   readonly property string workBadgeColorSetting: PresentationSettings.normalizeColorSetting(setting("workBadgeColor", "auto"))
   readonly property bool darkPopupTheme: PresentationSettings.isDarkRgb(
@@ -1067,8 +1067,8 @@ Panel {
                 width: parent.width
                 label: root.language === "en" ? "Show subscriptions" : (root.language === "zh-Hant" ? "顯示訂閱資料" : "显示订阅数据")
                 description: root.language === "en"
-                  ? "Render work schedules, festivals, and events from the typed snapshot"
-                  : (root.language === "zh-Hant" ? "顯示班休、節日與事件" : "显示班休、节日与事件")
+                  ? "Render date-specific schedule overrides, festivals, and events. Weekly rest settings remain active."
+                  : (root.language === "zh-Hant" ? "顯示指定日期的班休覆蓋、節日與事件；每週休息設定仍然生效。" : "显示具体日期的班休覆盖、节日与事件；每周休息设置仍然生效。")
                 checked: root.showSubscriptions
                 foreground: root.contentForeground
                 fontFamily: root.contentFontFamily
@@ -1078,19 +1078,32 @@ Panel {
               PanelSeparator { foreground: root.contentForeground }
 
               Text {
-                text: root.language === "en" ? "Work / rest display" : (root.language === "zh-Hant" ? "班休顯示" : "班休显示")
+                text: root.language === "en" ? "Base weekly schedule" : (root.language === "zh-Hant" ? "基礎每週班休" : "基础每周班休")
                 color: root.contentForeground
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.subtitle
                 font.bold: true
               }
 
+              Text {
+                width: parent.width
+                text: root.language === "en"
+                  ? "These switches define the ordinary week. A subscribed record for a specific date takes precedence: 休 changes work to rest; 班 changes rest to make-up work."
+                  : (root.language === "zh-Hant"
+                    ? "這些開關定義常規每週作息；具體日期的訂閱記錄優先：『休』把工作日改為休息，『班』把休息日改為補班。"
+                    : "这些开关定义常规每周作息；具体日期的订阅记录优先：“休”把工作日改为休息，“班”把休息日改为补班。")
+                color: Qt.darker(root.contentForeground, 1.45)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
               Toggle {
                 width: parent.width
-                label: root.language === "en" ? "Saturday is always rest" : (root.language === "zh-Hant" ? "週六固定休息" : "周六固定休息")
+                label: root.language === "en" ? "Saturday is a regular rest day" : (root.language === "zh-Hant" ? "週六為常規休息日" : "周六为常规休息日")
                 description: root.language === "en"
-                  ? "Every Saturday shows 休 and overrides a subscribed 班 record."
-                  : (root.language === "zh-Hant" ? "所有週六顯示「休」，並覆蓋訂閱中的「班」。" : "所有周六显示“休”，并覆盖订阅中的“班”。")
+                  ? "Used as the base state; a subscribed 休 or 班 record for that Saturday takes precedence."
+                  : (root.language === "zh-Hant" ? "作為基礎狀態；該週六如有訂閱的『休』或『班』記錄，則以訂閱為準。" : "作为基础状态；该周六如有订阅的“休”或“班”记录，则以订阅为准。")
                 checked: root.saturdayIsRest
                 foreground: root.contentForeground
                 fontFamily: root.contentFontFamily
@@ -1099,10 +1112,10 @@ Panel {
 
               Toggle {
                 width: parent.width
-                label: root.language === "en" ? "Sunday is always rest" : (root.language === "zh-Hant" ? "週日固定休息" : "周日固定休息")
+                label: root.language === "en" ? "Sunday is a regular rest day" : (root.language === "zh-Hant" ? "週日為常規休息日" : "周日为常规休息日")
                 description: root.language === "en"
-                  ? "Every Sunday shows 休 and overrides a subscribed 班 record."
-                  : (root.language === "zh-Hant" ? "所有週日顯示「休」，並覆蓋訂閱中的「班」。" : "所有周日显示“休”，并覆盖订阅中的“班”。")
+                  ? "Used as the base state; a subscribed 休 or 班 record for that Sunday takes precedence."
+                  : (root.language === "zh-Hant" ? "作為基礎狀態；該週日如有訂閱的『休』或『班』記錄，則以訂閱為準。" : "作为基础状态；该周日如有订阅的“休”或“班”记录，则以订阅为准。")
                 checked: root.sundayIsRest
                 foreground: root.contentForeground
                 fontFamily: root.contentFontFamily

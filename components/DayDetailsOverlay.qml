@@ -36,43 +36,86 @@ Item {
   }
 
 
+  function presentationInfo() {
+    return day && day.presentation ? day.presentation : null
+  }
+
+  function basePolicy() {
+    return day && day.basePolicy ? day.basePolicy : null
+  }
+
+  function hasWorkRest() {
+    var presentation = presentationInfo()
+    return presentation && String(presentation.badgeText || "") !== ""
+  }
+
+  function workRestTitle() {
+    if (!day) return ""
+    if (day.schedule && day.schedule.title) return String(day.schedule.title)
+    var policy = basePolicy()
+    return policy && policy.title ? String(policy.title) : ""
+  }
+
+  function workRestStatusLine() {
+    if (!hasWorkRest()) return ""
+    var presentation = presentationInfo()
+    var transition = String(presentation.scheduleTransition || "")
+    var status = ""
+    if (presentation.badgeRole === "off")
+      status = tr("休", "休", transition === "work-to-rest" ? "Day off" : "Rest day")
+    else if (presentation.badgeRole === "work")
+      status = tr("班", "班", transition === "rest-to-work" ? "Make-up workday" : "Scheduled workday")
+    else
+      status = tr("来源冲突", "來源衝突", "Source conflict")
+    var title = workRestTitle()
+    return status + (title ? " · " + title : "")
+  }
+
+  function transitionLabel(transition) {
+    if (transition === "base-rest")
+      return tr("基础每周休息日", "基礎每週休息日", "Base weekly rest day")
+    if (transition === "rest-to-work")
+      return tr("补班：取消基础休息", "補班：取消基礎休息", "Make-up work: overrides base rest")
+    if (transition === "work-to-rest")
+      return tr("放假：覆盖基础工作日", "放假：覆蓋基礎工作日", "Day off: overrides base work")
+    if (transition === "rest-to-rest")
+      return tr("订阅休息与基础规则一致", "訂閱休息與基礎規則一致", "Subscribed rest agrees with base rest")
+    if (transition === "work-to-work")
+      return tr("订阅上班与基础规则一致", "訂閱上班與基礎規則一致", "Subscribed work agrees with base work")
+    return ""
+  }
+
   function scheduleSourceLine() {
-    if (!day || !day.schedule) return ""
+    if (!day || !hasWorkRest()) return ""
     var schedule = day.schedule
-    if (schedule.weekendOverride) {
-      var line = tr("本地周末规则", "本地週末規則", "Local weekend rule")
-      var overridden = schedule.overriddenSchedule
-      if (overridden) {
-        var state = overridden.status === "off"
-          ? tr("休", "休", "off")
-          : overridden.status === "work"
-            ? tr("班", "班", "work")
-            : tr("冲突", "衝突", "conflict")
-        line += tr(" · 已覆盖订阅：", " · 已覆蓋訂閱：", " · Overrides subscribed: ") + state
-        if (overridden.title) line += " · " + overridden.title
-      }
-      return line
-    }
-    if (schedule.conflict && schedule.candidates) {
-      var parts = []
+    if (schedule && schedule.conflict && schedule.candidates) {
+      var conflicts = []
       for (var i = 0; i < schedule.candidates.length; i++) {
         var candidate = schedule.candidates[i] || {}
         var payload = candidate.payload || {}
-        var state = payload.status === "off" ? tr("休", "休", "off") : tr("班", "班", "work")
-        parts.push(String(candidate.sourceId || "?") + "=" + state)
+        var candidateStatus = String(candidate.resolvedStatus || payload.status || candidate.status || "")
+        var state = candidateStatus === "off" ? tr("休", "休", "off") : tr("班", "班", "work")
+        conflicts.push(String(candidate.sourceId || "?") + "=" + state)
       }
-      return parts.join(" · ")
+      return conflicts.join(" · ")
     }
-    return schedule.sourceId
-      ? tr("来源：", "來源：", "Source: ") + schedule.sourceId
-      : ""
+
+    var parts = []
+    if (schedule && schedule.sourceId)
+      parts.push(tr("来源：", "來源：", "Source: ") + schedule.sourceId)
+    var presentation = presentationInfo()
+    var transition = presentation ? transitionLabel(String(presentation.scheduleTransition || "")) : ""
+    if (transition) parts.push(transition)
+    return parts.join(" · ")
   }
 
   function scheduleColor() {
-    if (!day || !day.schedule) return foreground
-    if (day.schedule.status === "off") return restColor
-    if (day.schedule.status === "work") return workColor
-    return conflictColor
+    var presentation = presentationInfo()
+    if (!presentation) return foreground
+    if (presentation.badgeRole === "off") return restColor
+    if (presentation.badgeRole === "work") return workColor
+    if (presentation.badgeRole === "conflict") return conflictColor
+    return foreground
   }
 
   function eventTime(record) {
@@ -164,7 +207,7 @@ Item {
         Column {
           width: parent.width
           spacing: Style.space(5)
-          visible: root.day && root.day.schedule !== null
+          visible: root.hasWorkRest()
 
           Text {
             text: root.tr("班休", "班休", "Work schedule")
@@ -177,16 +220,7 @@ Item {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: {
-              if (!root.day || !root.day.schedule) return ""
-              var schedule = root.day.schedule
-              var status = schedule.status === "off"
-                ? root.tr("休", "休", "Day off")
-                : schedule.status === "work"
-                  ? root.tr("班", "班", "Make-up workday")
-                  : root.tr("来源冲突", "來源衝突", "Source conflict")
-              return status + (schedule.title ? " · " + schedule.title : "")
-            }
+            text: root.workRestStatusLine()
             color: root.scheduleColor()
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -274,11 +308,11 @@ Item {
 
         Text {
           width: parent.width
-          visible: root.day && root.day.schedule === null
+          visible: root.day && !root.hasWorkRest()
             && (!root.day.festivals || root.day.festivals.length === 0)
             && (!root.day.events || root.day.events.length === 0)
           wrapMode: Text.WordWrap
-          text: root.tr("当天没有订阅记录", "當天沒有訂閱記錄", "No subscription records for this day")
+          text: root.tr("当天没有班休、节日或事件记录", "當天沒有班休、節日或事件記錄", "No work/rest, festival, or event records for this day")
           color: Qt.darker(root.foreground, 1.5)
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
