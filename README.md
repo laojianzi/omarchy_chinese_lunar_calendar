@@ -11,6 +11,7 @@ format cycling, middle-click timezone picker) still works exactly the same;
 this plugin adds lunar facts and typed subscription overlays on top.
 
 ![Calendar popup](screenshots/calendar.png)
+![Event Detail panel](screenshots/detail.png)
 
 ## Features
 
@@ -47,6 +48,7 @@ this plugin adds lunar facts and typed subscription overlays on top.
 
 <p float="left">
   <img src="screenshots/options.png" alt="Options panel" width="320" />
+  <img src="screenshots/options2.png" alt="Options panel" width="320" />
   <img src="screenshots/languages.png" alt="Language dropdown" width="320" />
 </p>
 
@@ -63,6 +65,8 @@ The first subscription release intentionally supports structured JSON only. A
 generic ICS feed is treated as a future, dedicated adapter because correct ICS
 support requires UID/recurrence, time-zone, all-day, and exception semantics;
 event titles are never guessed to mean `休` or `班`.
+
+![Subscriptions settings panel](screenshots/subscription.png)
 
 ## Installation
 
