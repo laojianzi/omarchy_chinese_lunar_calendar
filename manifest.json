@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "garyliu.lunar-calendar",
   "name": "Lunar Calendar",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "author": "Gary Liu",
   "license": "MIT",
-  "description": "Date/time label with a Chinese lunar calendar popup: lunar date and jieqi (24 solar terms)",
+  "description": "Chinese lunar calendar with typed schedule, festival, and event subscriptions",
   "kinds": [
     "bar-widget"
   ],
@@ -14,8 +14,11 @@
   },
   "barWidget": {
     "displayName": "Lunar Calendar",
-    "description": "Date/time label with a Chinese lunar calendar popup",
+    "description": "Chinese lunar calendar with typed subscription overlays",
     "category": "Time",
     "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.clock"
   }
 }

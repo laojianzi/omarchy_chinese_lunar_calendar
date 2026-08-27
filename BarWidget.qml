@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "subscriptions" as Subscriptions
 
 // Date/time label for the bar, and the host for the lunar calendar popup.
 //
@@ -15,6 +16,10 @@ BarWidget {
   moduleName: "garyliu.lunar-calendar"
 
   property date displayDate: clock.date
+
+  Subscriptions.SubscriptionStore {
+    id: subscriptionStore
+  }
 
   // Read from the same shell.json entry the Panel writes language to, so
   // the bar label follows the Options panel's language choice rather than
@@ -38,6 +43,7 @@ BarWidget {
 
   function refresh() {
     displayDate = new Date()
+    subscriptionStore.refreshIfStale("manual")
     if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
   }
 
@@ -100,6 +106,7 @@ BarWidget {
     if ("settings" in target) target.settings = root.settings
     if ("anchorItem" in target) target.anchorItem = button
     if ("hostWidget" in target) target.hostWidget = root
+    if ("subscriptionStore" in target) target.subscriptionStore = subscriptionStore
   }
 
   implicitWidth: button.implicitWidth

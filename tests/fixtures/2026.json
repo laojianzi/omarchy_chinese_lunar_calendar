@@ -1,0 +1,8 @@
+{
+  "year": 2026,
+  "papers": ["https://www.gov.cn/example"],
+  "days": [
+    {"name":"春节","date":"2026-02-17","isOffDay":true},
+    {"name":"春节","date":"2026-02-28","isOffDay":false}
+  ]
+}

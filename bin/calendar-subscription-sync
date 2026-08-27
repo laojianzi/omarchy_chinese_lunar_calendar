@@ -1,0 +1,745 @@
+#!/usr/bin/env python3
+"""Synchronize typed calendar subscriptions into one canonical snapshot.
+
+The shell never parses remote formats directly. This helper downloads sources,
+normalizes them into schedule/festival/event records, validates the result, and
+atomically replaces a local snapshot. Failed sources reuse their last known-good
+normalized cache.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import datetime as dt
+import hashlib
+import json
+import os
+import pathlib
+import re
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Iterable
+
+MAX_SOURCE_BYTES = 512 * 1024
+MAX_CONFIG_BYTES = 256 * 1024
+MAX_RECORDS_PER_SOURCE = 10_000
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+KINDS = {"schedule", "festival", "event"}
+STATUSES = {"off", "work"}
+
+def xdg_path(env_name: str, fallback: str) -> pathlib.Path:
+    return pathlib.Path(os.environ.get(env_name, os.path.expanduser(fallback)))
+
+CONFIG_HOME = xdg_path("XDG_CONFIG_HOME", "~/.config") / "omarchy/lunar-calendar"
+CACHE_HOME = xdg_path("XDG_CACHE_HOME", "~/.cache") / "omarchy/lunar-calendar"
+STATE_HOME = xdg_path("XDG_STATE_HOME", "~/.local/state") / "omarchy/lunar-calendar"
+DEFAULT_CONFIG = CONFIG_HOME / "subscriptions.json"
+DEFAULT_SNAPSHOT = CACHE_HOME / "snapshot-v1.json"
+DEFAULT_STATE = STATE_HOME / "sync-state.json"
+
+DEFAULT_CONFIG_DATA: dict[str, Any] = {
+    "schemaVersion": 1,
+    "autoUpdate": True,
+    "refreshOnStartup": True,
+    "refreshOnOpen": True,
+    "checkIntervalMinutes": 60,
+    "sources": [
+        {
+            "id": "cn-official",
+            "name": "中国法定节假日",
+            "enabled": True,
+            "adapter": "holiday-cn-json",
+            "urlTemplate": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json",
+            "refreshHours": 24,
+            "priority": 100,
+        }
+    ],
+}
+
+class SyncError(RuntimeError):
+    pass
+
+def iso_now(now: dt.datetime | None = None) -> str:
+    current = now or dt.datetime.now(dt.timezone.utc)
+    return current.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def read_json(path: pathlib.Path, default: Any = None) -> Any:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return copy.deepcopy(default)
+
+def atomic_write_json(path: pathlib.Path, value: Any, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+def ensure_config(path: pathlib.Path) -> dict[str, Any]:
+    if not path.exists():
+        atomic_write_json(path, DEFAULT_CONFIG_DATA)
+    original = read_json(path)
+    config = normalize_config(original)
+    # Rewriting performs a small schema-1 migration for configs created before
+    # the UI exposed automatic-update policy fields. Avoid touching the file on
+    # every sync so a watched settings page does not reload unnecessarily.
+    try:
+        permissions = path.stat().st_mode & 0o777
+    except OSError:
+        permissions = 0
+    if original != config or permissions != 0o600:
+        atomic_write_json(path, config)
+    return config
+
+def safe_source_id(value: Any) -> str:
+    source_id = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", source_id):
+        raise SyncError(f"invalid source id: {source_id!r}")
+    return source_id
+
+def bounded_number(value: Any, *, name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(default if value is None else value)
+    except (TypeError, ValueError) as error:
+        raise SyncError(f"{name} must be numeric") from error
+    if not minimum <= number <= maximum:
+        raise SyncError(f"{name} must be between {minimum:g} and {maximum:g}")
+    return number
+
+def normalize_url(value: Any, *, template: bool = False) -> str:
+    url = str(value or "").strip()
+    if url.startswith("webcal://"):
+        url = "https://" + url[len("webcal://"):]
+    if not url or len(url) > 4096 or "\n" in url or "\r" in url:
+        raise SyncError("subscription URL is invalid")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"https", "file"}:
+        raise SyncError("subscription URL must use HTTPS or file://")
+    if parsed.scheme == "https" and not parsed.netloc:
+        raise SyncError("subscription HTTPS URL requires a host")
+    if template and "{year}" not in url:
+        raise SyncError("holiday-cn-json URL template must contain {year}")
+    return url
+
+def normalize_config(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("schemaVersion") != 1:
+        raise SyncError("subscription config requires schemaVersion 1")
+
+    raw_sources = value.get("sources")
+    if not isinstance(raw_sources, list):
+        raise SyncError("subscription config sources must be an array")
+    if len(raw_sources) > 64:
+        raise SyncError("subscription config contains too many sources")
+
+    normalized_sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            raise SyncError("every subscription source must be an object")
+        source_id = safe_source_id(raw_source.get("id"))
+        if source_id in seen:
+            raise SyncError(f"duplicate source id: {source_id}")
+        seen.add(source_id)
+
+        adapter = str(raw_source.get("adapter") or "")
+        if adapter not in {"holiday-cn-json", "calendar-feed-v1"}:
+            raise SyncError(f"unsupported adapter: {adapter!r}")
+        name = str(raw_source.get("name") or source_id).strip()
+        if not name or len(name) > 200:
+            raise SyncError(f"invalid source name for {source_id}")
+
+        source: dict[str, Any] = {
+            "id": source_id,
+            "name": name,
+            "enabled": raw_source.get("enabled", True) is not False,
+            "adapter": adapter,
+            "refreshHours": bounded_number(
+                raw_source.get("refreshHours"),
+                name=f"{source_id}.refreshHours",
+                default=24 if adapter == "holiday-cn-json" else 6,
+                minimum=0.1,
+                maximum=8760,
+            ),
+            "priority": bounded_number(
+                raw_source.get("priority"),
+                name=f"{source_id}.priority",
+                default=100 if adapter == "holiday-cn-json" else 20,
+                minimum=-10000,
+                maximum=10000,
+            ),
+        }
+        if adapter == "holiday-cn-json":
+            source["urlTemplate"] = normalize_url(raw_source.get("urlTemplate"), template=True)
+        else:
+            source["url"] = normalize_url(raw_source.get("url"))
+        normalized_sources.append(source)
+
+    check_interval = bounded_number(
+        value.get("checkIntervalMinutes"),
+        name="checkIntervalMinutes",
+        default=60,
+        minimum=15,
+        maximum=1440,
+    )
+    return {
+        "schemaVersion": 1,
+        "autoUpdate": value.get("autoUpdate", True) is not False,
+        "refreshOnStartup": value.get("refreshOnStartup", True) is not False,
+        "refreshOnOpen": value.get("refreshOnOpen", True) is not False,
+        "checkIntervalMinutes": int(check_interval) if check_interval.is_integer() else check_interval,
+        "sources": normalized_sources,
+    }
+
+def parse_date(value: Any) -> dt.date:
+    text = str(value or "")
+    if not DATE_RE.fullmatch(text):
+        raise SyncError(f"invalid date: {text!r}")
+    try:
+        return dt.date.fromisoformat(text)
+    except ValueError as error:
+        raise SyncError(f"invalid date: {text!r}") from error
+
+def parse_datetime(value: Any) -> dt.datetime:
+    text = str(value or "")
+    if not text:
+        raise SyncError("datetime is required")
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = dt.datetime.fromisoformat(normalized)
+    except ValueError as error:
+        raise SyncError(f"invalid datetime: {text!r}") from error
+    if parsed.tzinfo is None:
+        raise SyncError("datetime requires an explicit UTC offset")
+    return parsed
+
+def dates_for_span(span: dict[str, Any]) -> list[str]:
+    mode = span.get("mode")
+    if mode == "date":
+        start = parse_date(span.get("start"))
+        end = parse_date(span.get("endExclusive") or span.get("end") or start.isoformat())
+        if end == start:
+            end += dt.timedelta(days=1)
+        if end < start or (end - start).days > 370:
+            raise SyncError("invalid or excessively long date span")
+        return [(start + dt.timedelta(days=offset)).isoformat() for offset in range((end - start).days)]
+
+    if mode == "datetime":
+        start_time = parse_datetime(span.get("start"))
+        end_time = parse_datetime(span.get("end") or span.get("start"))
+        if end_time < start_time:
+            raise SyncError("event end precedes start")
+        if end_time == start_time:
+            end_time += dt.timedelta(seconds=1)
+        last_instant = end_time - dt.timedelta(microseconds=1)
+        start_date = start_time.date()
+        end_date = last_instant.astimezone(start_time.tzinfo).date()
+        if (end_date - start_date).days > 370:
+            raise SyncError("event span is too long")
+        return [
+            (start_date + dt.timedelta(days=offset)).isoformat()
+            for offset in range((end_date - start_date).days + 1)
+        ]
+
+    raise SyncError(f"unsupported span mode: {mode!r}")
+
+def normalize_record(raw: Any, source: dict[str, Any], ordinal: int) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise SyncError("calendar record must be an object")
+    source_id = safe_source_id(source.get("id"))
+    kind = str(raw.get("kind") or "")
+    if kind not in KINDS:
+        raise SyncError(f"unsupported record kind: {kind!r}")
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        raise SyncError("record title is required")
+    if len(title) > 200:
+        raise SyncError("record title is too long")
+    span = raw.get("span")
+    if not isinstance(span, dict):
+        raise SyncError("record span must be an object")
+    if kind in {"schedule", "festival"} and span.get("mode") != "date":
+        raise SyncError(f"{kind} records require a date span")
+
+    record_id = str(raw.get("id") or f"{source_id}:{ordinal}")
+    if len(record_id) > 300:
+        raise SyncError("record id is too long")
+    priority = raw.get("priority", source.get("priority", 0))
+    try:
+        priority_number = float(priority)
+    except (TypeError, ValueError) as error:
+        raise SyncError("record priority must be numeric") from error
+
+    payload = raw.get("payload") or {}
+    if not isinstance(payload, dict):
+        raise SyncError("record payload must be an object")
+    if kind == "schedule":
+        status = str(payload.get("status") or "")
+        if status not in STATUSES:
+            raise SyncError("schedule payload.status must be off or work")
+        payload = dict(payload)
+        payload["status"] = status
+
+    normalized = {
+        "id": record_id,
+        "sourceId": source_id,
+        "kind": kind,
+        "span": dict(span),
+        "title": title,
+        "priority": priority_number,
+        "payload": payload,
+    }
+    if raw.get("updatedAt"):
+        normalized["updatedAt"] = str(raw["updatedAt"])
+    dates_for_span(normalized["span"])
+    return normalized
+
+def holiday_cn_records(document: Any, source: dict[str, Any], suffix: str) -> list[dict[str, Any]]:
+    if not isinstance(document, dict) or not isinstance(document.get("days"), list):
+        raise SyncError("holiday-cn document must contain a days array")
+    if len(document["days"]) > MAX_RECORDS_PER_SOURCE:
+        raise SyncError("holiday-cn document contains too many days")
+    records: list[dict[str, Any]] = []
+    source_id = safe_source_id(source.get("id"))
+    priority = source.get("priority", 100)
+    papers = [str(item) for item in document.get("papers", []) if isinstance(item, str)]
+    for index, day in enumerate(document["days"]):
+        if not isinstance(day, dict):
+            continue
+        date_key = parse_date(day.get("date")).isoformat()
+        is_off = day.get("isOffDay")
+        if not isinstance(is_off, bool):
+            raise SyncError("holiday-cn isOffDay must be boolean")
+        title = str(day.get("name") or "").strip()
+        status = "off" if is_off else "work"
+        title_digest = hashlib.sha256(title.encode("utf-8")).hexdigest()[:12]
+        records.append(
+            normalize_record(
+                {
+                    "id": f"{source_id}:{date_key}:{status}:{title_digest}",
+                    "kind": "schedule",
+                    "title": title,
+                    "priority": priority,
+                    "span": {"mode": "date", "start": date_key, "endExclusive": (parse_date(date_key) + dt.timedelta(days=1)).isoformat()},
+                    "payload": {
+                        "status": status,
+                        "scope": "official",
+                        "papers": papers,
+                    },
+                },
+                source,
+                index,
+            )
+        )
+    return records
+
+def calendar_feed_records(document: Any, source: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(document, dict) or document.get("schemaVersion") != 1:
+        raise SyncError("calendar-feed-v1 requires schemaVersion 1")
+    raw_records = document.get("records")
+    if not isinstance(raw_records, list):
+        raise SyncError("calendar-feed-v1 records must be an array")
+    if len(raw_records) > MAX_RECORDS_PER_SOURCE:
+        raise SyncError("calendar-feed-v1 contains too many records")
+    return [normalize_record(record, source, index) for index, record in enumerate(raw_records)]
+
+def cache_paths(source_id: str, suffix: str = "") -> tuple[pathlib.Path, pathlib.Path]:
+    safe_suffix = re.sub(r"[^A-Za-z0-9._-]", "_", suffix)
+    stem = source_id + ("-" + safe_suffix if safe_suffix else "")
+    return CACHE_HOME / "raw" / f"{stem}.json", CACHE_HOME / "normalized" / f"{stem}.json"
+
+def load_state(path: pathlib.Path) -> dict[str, Any]:
+    state = read_json(path, {"schemaVersion": 1, "sources": {}})
+    if not isinstance(state, dict):
+        return {"schemaVersion": 1, "sources": {}}
+    state.setdefault("schemaVersion", 1)
+    state.setdefault("sources", {})
+    return state
+
+def refresh_interval(source: dict[str, Any]) -> float:
+    try:
+        return float(source.get("refreshHours", 24))
+    except (TypeError, ValueError) as error:
+        raise SyncError("refreshHours must be numeric") from error
+
+
+def source_fresh(source_state: dict[str, Any], refresh_hours: float, now: dt.datetime) -> bool:
+    last_checked = source_state.get("lastCheckedAt")
+    if not last_checked:
+        return False
+    try:
+        checked = parse_datetime(last_checked)
+    except SyncError:
+        return False
+    return now - checked.astimezone(now.tzinfo) < dt.timedelta(hours=max(0.1, refresh_hours))
+
+def fetch_bytes(url: str, headers: dict[str, str]) -> tuple[bytes | None, dict[str, str], bool]:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "file":
+        try:
+            data = pathlib.Path(urllib.request.url2pathname(parsed.path)).read_bytes()
+        except OSError as error:
+            raise SyncError("local source is unavailable") from error
+        if len(data) > MAX_SOURCE_BYTES:
+            raise SyncError("source exceeds size limit")
+        return data, {}, False
+    if parsed.scheme != "https":
+        raise SyncError("only https and file URLs are supported")
+
+    request = urllib.request.Request(url, headers={"User-Agent": "omarchy-lunar-calendar/1", **headers})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if urllib.parse.urlparse(response.geturl()).scheme != "https":
+                raise SyncError("source redirect must remain HTTPS")
+            data = response.read(MAX_SOURCE_BYTES + 1)
+            if len(data) > MAX_SOURCE_BYTES:
+                raise SyncError("source exceeds size limit")
+            response_headers = {
+                "etag": response.headers.get("ETag", ""),
+                "lastModified": response.headers.get("Last-Modified", ""),
+            }
+            return data, response_headers, False
+    except urllib.error.HTTPError as error:
+        if error.code == 304:
+            return None, {}, True
+        raise SyncError(f"HTTP {error.code}") from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", error)
+        host = parsed.hostname or "source"
+        raise SyncError(f"{host}: {reason}") from error
+
+def decode_json(data: bytes) -> Any:
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SyncError("source is not valid UTF-8 JSON") from error
+
+def synchronize_document(
+    source: dict[str, Any],
+    source_state: dict[str, Any],
+    url: str,
+    suffix: str,
+    force: bool,
+    now: dt.datetime,
+) -> tuple[Any, dict[str, Any], bool]:
+    source_id = safe_source_id(source.get("id"))
+    raw_path, _ = cache_paths(source_id, suffix)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+
+    refresh_hours = refresh_interval(source)
+    if not force and source_fresh(source_state, refresh_hours, now) and raw_path.exists():
+        return read_json(raw_path), source_state, True
+
+    headers: dict[str, str] = {}
+    if source_state.get("etag"):
+        headers["If-None-Match"] = str(source_state["etag"])
+    if source_state.get("lastModified"):
+        headers["If-Modified-Since"] = str(source_state["lastModified"])
+
+    data, response_headers, not_modified = fetch_bytes(url, headers)
+    updated_state = dict(source_state)
+    updated_state.pop("pending", None)
+    updated_state["lastCheckedAt"] = iso_now(now)
+    if not_modified:
+        if not raw_path.exists():
+            raise SyncError("server returned not-modified without a local cache")
+        return read_json(raw_path), updated_state, True
+
+    if data is None:
+        raise SyncError("empty source response")
+    document = decode_json(data)
+    atomic_write_json(raw_path, document)
+    if response_headers.get("etag"):
+        updated_state["etag"] = response_headers["etag"]
+    if response_headers.get("lastModified"):
+        updated_state["lastModified"] = response_headers["lastModified"]
+    updated_state["lastSuccessAt"] = iso_now(now)
+    return document, updated_state, False
+
+def normalized_cache(source_id: str) -> pathlib.Path:
+    return CACHE_HOME / "normalized" / f"{source_id}.json"
+
+def sync_source(source: dict[str, Any], state: dict[str, Any], force: bool, now: dt.datetime) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    source_id = safe_source_id(source.get("id"))
+    adapter = str(source.get("adapter") or "")
+    source_state = dict(state.get("sources", {}).get(source_id, {}))
+    result_state: dict[str, Any] = {
+        "name": str(source.get("name") or source_id),
+        "adapter": adapter,
+        "status": "ok",
+        "stale": False,
+        "capabilities": ["schedule"] if adapter == "holiday-cn-json" else ["schedule", "festival", "event"],
+    }
+
+    try:
+        records: list[dict[str, Any]] = []
+        document_states = dict(source_state.get("documents", {}))
+        if adapter == "holiday-cn-json":
+            template = str(source.get("urlTemplate") or "")
+            if "{year}" not in template:
+                raise SyncError("holiday-cn-json requires urlTemplate with {year}")
+            years = [now.year - 1, now.year, now.year + 1]
+            document_errors: list[str] = []
+            uncached_errors: list[str] = []
+            pending_years: list[int] = []
+            refresh_hours = refresh_interval(source)
+            for year in years:
+                suffix = str(year)
+                previous_state = dict(document_states.get(suffix, {}))
+                if (
+                    year > now.year
+                    and previous_state.get("pending") is True
+                    and not force
+                    and source_fresh(previous_state, refresh_hours, now)
+                ):
+                    pending_years.append(year)
+                    continue
+
+                try:
+                    document, document_state, _ = synchronize_document(
+                        source,
+                        previous_state,
+                        template.replace("{year}", suffix),
+                        suffix,
+                        force,
+                        now,
+                    )
+                    document_states[suffix] = document_state
+                    records.extend(holiday_cn_records(document, source, suffix))
+                except SyncError as error:
+                    message = str(error)
+                    raw_path, _ = cache_paths(source_id, suffix)
+                    cached_document = read_json(raw_path) if raw_path.exists() else None
+                    if cached_document is not None:
+                        try:
+                            records.extend(holiday_cn_records(cached_document, source, suffix))
+                            error_state = previous_state
+                            error_state["lastCheckedAt"] = iso_now(now)
+                            document_states[suffix] = error_state
+                            document_errors.append(f"{suffix}: {message}")
+                            continue
+                        except SyncError:
+                            cached_document = None
+
+                    expected_future_absence = year > now.year and (
+                        message == "HTTP 404" or message == "local source is unavailable"
+                    )
+                    if expected_future_absence:
+                        pending_state = previous_state
+                        pending_state.update({"pending": True, "lastCheckedAt": iso_now(now)})
+                        document_states[suffix] = pending_state
+                        pending_years.append(year)
+                    else:
+                        document_errors.append(f"{suffix}: {message}")
+                        uncached_errors.append(f"{suffix}: {message}")
+
+            if uncached_errors and normalized_cache(source_id).exists():
+                raise SyncError("; ".join(uncached_errors))
+            if not records and document_errors:
+                raise SyncError("; ".join(document_errors))
+            if pending_years:
+                result_state["pendingYears"] = pending_years
+            if document_errors:
+                result_state.update({
+                    "status": "partial",
+                    "stale": True,
+                    "error": "; ".join(document_errors),
+                })
+        elif adapter == "calendar-feed-v1":
+            url = str(source.get("url") or "")
+            document, document_state, _ = synchronize_document(
+                source,
+                dict(document_states.get("feed", {})),
+                url,
+                "feed",
+                force,
+                now,
+            )
+            document_states["feed"] = document_state
+            records.extend(calendar_feed_records(document, source))
+        else:
+            raise SyncError(f"unsupported adapter: {adapter!r}")
+
+        source_state["documents"] = document_states
+        normalized_path = normalized_cache(source_id)
+        atomic_write_json(normalized_path, {"schemaVersion": 1, "records": records})
+        result_state.update(source_state)
+        result_state["capabilities"] = sorted({record["kind"] for record in records})
+        checked = [str(value.get("lastCheckedAt")) for value in document_states.values() if value.get("lastCheckedAt")]
+        succeeded = [str(value.get("lastSuccessAt")) for value in document_states.values() if value.get("lastSuccessAt")]
+        if checked:
+            result_state["lastCheckedAt"] = max(checked)
+        if succeeded:
+            result_state["lastSuccessAt"] = max(succeeded)
+        return records, result_state
+    except SyncError as error:
+        cached = read_json(normalized_cache(source_id))
+        if isinstance(cached, dict) and isinstance(cached.get("records"), list):
+            result_state.update(source_state)
+            result_state.update({"status": "stale", "stale": True, "error": str(error)})
+            result_state["capabilities"] = sorted({
+                str(record.get("kind")) for record in cached["records"]
+                if isinstance(record, dict) and record.get("kind") in KINDS
+            })
+            return cached["records"], result_state
+        result_state.update({"status": "error", "stale": True, "error": str(error)})
+        return [], result_state
+
+def public_source_result(result: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "name",
+        "adapter",
+        "status",
+        "stale",
+        "capabilities",
+        "error",
+        "lastCheckedAt",
+        "lastSuccessAt",
+        "pendingYears",
+    )
+    return {key: result[key] for key in keys if key in result}
+
+def record_identity(record: dict[str, Any]) -> str:
+    return f"{record.get('sourceId', '')}\0{record.get('id', '')}\0{record.get('kind', '')}"
+
+def build_snapshot(records: Iterable[dict[str, Any]], sources: dict[str, Any], now: dt.datetime) -> dict[str, Any]:
+    by_date: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    seen: set[str] = set()
+    normalized_records: list[dict[str, Any]] = []
+
+    for record in records:
+        identity = record_identity(record)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized_records.append(record)
+        bucket_key = {"schedule": "schedule", "festival": "festivals", "event": "events"}[record["kind"]]
+        for date_key in dates_for_span(record["span"]):
+            bucket = by_date.setdefault(date_key, {"schedule": [], "festivals": [], "events": []})
+            bucket[bucket_key].append(record)
+
+    for bucket in by_date.values():
+        for key in ("schedule", "festivals", "events"):
+            bucket[key].sort(key=lambda item: (-float(item.get("priority", 0)), str(item.get("title", "")), str(item.get("id", ""))))
+
+    digest_input = json.dumps(
+        {"sources": sources, "records": normalized_records},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "schemaVersion": 1,
+        "revision": "sha256:" + hashlib.sha256(digest_input).hexdigest(),
+        "generatedAt": iso_now(now),
+        "sources": sources,
+        "byDate": by_date,
+    }
+
+def parse_now(value: str | None) -> dt.datetime:
+    if not value:
+        return dt.datetime.now(dt.timezone.utc)
+    parsed = parse_datetime(value)
+    return parsed.astimezone(dt.timezone.utc)
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=pathlib.Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--snapshot", type=pathlib.Path, default=DEFAULT_SNAPSHOT)
+    parser.add_argument("--state", type=pathlib.Path, default=DEFAULT_STATE)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--now", help="override current time for deterministic tests")
+    config_action = parser.add_mutually_exclusive_group()
+    config_action.add_argument("--print-config", action="store_true")
+    config_action.add_argument("--write-config-stdin", action="store_true")
+    config_action.add_argument("--reset-config", action="store_true")
+    args = parser.parse_args(argv)
+
+    try:
+        if args.write_config_stdin:
+            # The QML Process writes one compact JSON line to stdin. Reading a
+            # line rather than waiting for EOF avoids putting private feed URLs
+            # in argv or blocking on an open stdin channel.
+            raw = sys.stdin.readline(MAX_CONFIG_BYTES + 1)
+            if not raw:
+                raise SyncError("no subscription config received on stdin")
+            if len(raw.encode("utf-8")) > MAX_CONFIG_BYTES:
+                raise SyncError("subscription config exceeds size limit")
+            try:
+                value = json.loads(raw)
+            except json.JSONDecodeError as error:
+                raise SyncError("subscription config is not valid JSON") from error
+            config = normalize_config(value)
+            atomic_write_json(args.config, config)
+            if not args.quiet:
+                print(json.dumps(config, ensure_ascii=False, sort_keys=True))
+            return 0
+
+        if args.reset_config:
+            config = normalize_config(copy.deepcopy(DEFAULT_CONFIG_DATA))
+            atomic_write_json(args.config, config)
+            if not args.quiet:
+                print(json.dumps(config, ensure_ascii=False, sort_keys=True))
+            return 0
+
+        config = ensure_config(args.config)
+        if args.print_config:
+            print(json.dumps(config, ensure_ascii=False, sort_keys=True))
+            return 0
+
+        now = parse_now(args.now)
+        state = load_state(args.state)
+        all_records: list[dict[str, Any]] = []
+        source_results: dict[str, Any] = {}
+        configured_ids: set[str] = set()
+
+        for raw_source in config["sources"]:
+            source_id = safe_source_id(raw_source.get("id"))
+            configured_ids.add(source_id)
+            if raw_source.get("enabled", True) is False:
+                continue
+            records, result = sync_source(raw_source, state, args.force, now)
+            all_records.extend(records)
+            source_results[source_id] = public_source_result(result)
+            state.setdefault("sources", {})[source_id] = {
+                key: result[key]
+                for key in ("etag", "lastModified", "lastCheckedAt", "lastSuccessAt", "documents")
+                if key in result
+            }
+
+        # Removing a source from the settings UI also removes its validator
+        # state. Raw and normalized last-known-good files remain harmless cache
+        # entries and may be reused if the source is re-added later.
+        state["sources"] = {
+            key: value for key, value in state.get("sources", {}).items()
+            if key in configured_ids
+        }
+
+        snapshot = build_snapshot(all_records, source_results, now)
+        atomic_write_json(args.snapshot, snapshot)
+        atomic_write_json(args.state, state)
+        if not args.quiet:
+            print(f"wrote {args.snapshot} with {len(snapshot['byDate'])} dates")
+        return 0
+    except (SyncError, OSError, ValueError) as error:
+        print(f"calendar-subscription-sync: {error}", file=sys.stderr)
+        return 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
