@@ -58,24 +58,47 @@ assert.strictEqual(projected.events.length, 1)
 assert.strictEqual(projected.presentation.eventDotCount, 1)
 assert.strictEqual(projected.festivals.length, 1, 'canonical festival id deduplicates local and remote records')
 
-const workSaturday = Projection.projectDay(
-  { ...cell, key: '2026-02-14', day: 14, weekday: 6, weekend: true },
-  {
-    schemaVersion: 1,
-    byDate: {
-      '2026-02-14': {
-        schedule: [{ id: 'work', kind: 'schedule', title: '春节', priority: 100, payload: { status: 'work' } }],
-        festivals: [],
-        events: []
-      }
+const saturdayCell = { ...cell, key: '2026-02-14', day: 14, weekday: 6, weekend: true }
+const saturdaySnapshot = {
+  schemaVersion: 1,
+  byDate: {
+    '2026-02-14': {
+      schedule: [{ id: 'work', kind: 'schedule', title: '春节补班', priority: 100, payload: { status: 'work' } }],
+      festivals: [],
+      events: []
     }
-  },
-  'zh-Hans',
-  true,
-  model
-)
+  }
+}
+
+const workSaturday = Projection.projectDay(saturdayCell, saturdaySnapshot, 'zh-Hans', true, model)
 assert.strictEqual(workSaturday.presentation.effectiveDayType, 'makeup-work')
 assert.strictEqual(workSaturday.presentation.badgeText, '班')
+
+const overriddenSaturday = Projection.projectDay(
+  saturdayCell,
+  saturdaySnapshot,
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true },
+  model
+)
+assert.strictEqual(overriddenSaturday.schedule.status, 'off')
+assert.strictEqual(overriddenSaturday.schedule.weekendOverride, true)
+assert.strictEqual(overriddenSaturday.schedule.overriddenSchedule.status, 'work')
+assert.strictEqual(overriddenSaturday.presentation.effectiveDayType, 'weekend-off')
+assert.strictEqual(overriddenSaturday.presentation.badgeText, '休')
+
+const sunday = Projection.projectDay(
+  { ...cell, key: '2026-02-15', day: 15, weekday: 0, weekend: true },
+  { schemaVersion: 1, byDate: {} },
+  'zh-Hans',
+  true,
+  { sundayIsRest: true },
+  model
+)
+assert.strictEqual(sunday.schedule.status, 'off')
+assert.strictEqual(sunday.schedule.title, '周日休息')
+assert.strictEqual(sunday.presentation.badgeText, '休')
 
 const conflict = Projection.resolveSchedule([
   { id: 'a', priority: 100, payload: { status: 'off' } },

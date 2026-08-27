@@ -21,6 +21,10 @@ this plugin adds lunar facts and typed subscription overlays on top.
   weekday/month names).
 - Typed subscription overlays keep work schedules (`休` / `班`), cultural
   festivals, and calendar events in separate rendering channels.
+- `休` and `班` colors support theme-aware `auto` defaults or custom
+  `#RRGGBB` values; badge text contrast is selected automatically.
+- Independent Saturday/Sunday rules can force every selected weekday to `休`,
+  retaining any overridden subscribed `班` record in the day-details view.
 - Subscription snapshots refresh outside the long-lived shell and fall back to
   the last known-good data when a source fails.
 - Omarchy's native Widget Settings now exposes the official holiday URL,
@@ -122,8 +126,10 @@ festivals, and events. Generic ICS is intentionally not guessed from event
 summaries; it should be added through a dedicated adapter that preserves UID,
 recurrence, time-zone, and all-day semantics.
 
-Use Omarchy's native Widget Settings for the official holiday URL and basic
-automatic-update policy. For multiple sources, open the calendar and click the
+Use Omarchy's native Widget Settings for the official holiday URL, automatic
+update policy, Saturday/Sunday rest overrides, and `休` / `班` colors. The same
+weekend and color controls are available in the calendar's gear menu. For
+multiple sources, open the calendar and click the
 visible **Subscriptions / 订阅** button in the top-right; the same entry is
 pinned at the top of the gear menu, `S` opens it from the keyboard, and the IPC
 method `garyliu.lunar-calendar subscriptions` opens it directly. The advanced
