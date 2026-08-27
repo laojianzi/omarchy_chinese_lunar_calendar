@@ -1,0 +1,33 @@
+name: Validate work-rest precedence refactor
+
+on:
+  push:
+    branches: [fix/settings-entry-layout]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/work-rest-precedence
+          fetch-depth: 0
+
+      - name: Run project and domain checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "19e448e33c6cc78d85778363108fef07a106a5c8"
+          ./tests/run.sh
+          python3 -m json.tool manifest.json >/dev/null
+          grep -q '"version": "1.5.0"' manifest.json
+          grep -q '"saturdayIsRest": true' manifest.json
+          grep -q 'rest-to-work' subscriptions/Projection.js
+          grep -q 'work-to-rest' subscriptions/Projection.js
+          grep -q 'candidate.resolvedStatus' components/DayDetailsOverlay.qml
+          ! grep -q 'weekendOverride' subscriptions/Projection.js
+          ! grep -q 'overriddenSchedule' components/DayDetailsOverlay.qml
+          git diff --check HEAD^ HEAD
