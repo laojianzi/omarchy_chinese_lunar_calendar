@@ -218,46 +218,66 @@ function projectionArgs(options, model) {
   return { options: options && typeof options === "object" ? options : {}, model: model }
 }
 
-function weekendRuleEnabled(cell, options) {
+// Saturday/Sunday settings describe the ordinary weekly schedule. They are
+// the base state only; a date-specific subscribed schedule is authoritative
+// for that date and is applied afterwards.
+function baseRestEnabled(cell, options) {
   if (!cell) return false
-  if (cell.weekday === 6) return options.saturdayIsRest === true
-  if (cell.weekday === 0) return options.sundayIsRest === true
+  if (cell.weekday === 6) return options.saturdayIsRest !== false
+  if (cell.weekday === 0) return options.sundayIsRest !== false
   return false
 }
 
-function weekendRuleTitle(cell, language) {
+function weeklyRestTitle(cell, language) {
   var saturday = cell && cell.weekday === 6
   if (language === "en") return saturday ? "Saturday rest" : "Sunday rest"
   if (language === "zh-Hant") return saturday ? "週六休息" : "週日休息"
   return saturday ? "周六休息" : "周日休息"
 }
 
-// A user-enabled weekend rule is an intentional local override. If a
-// subscribed source says 班 on that weekday, retain the original record
-// for details but render the effective state as 休, exactly as configured.
-function applyWeekendRule(cell, subscribedSchedule, options, language) {
-  if (!weekendRuleEnabled(cell, options)) return subscribedSchedule
-  if (subscribedSchedule && subscribedSchedule.status === "off") return subscribedSchedule
+function baseWeekPolicy(cell, options, language) {
+  var isRest = baseRestEnabled(cell, options || {})
   return {
-    status: "off",
-    title: weekendRuleTitle(cell, language),
-    badge: "休",
-    sourceId: "builtin-weekend-policy",
-    conflict: false,
-    candidates: [],
-    weekendOverride: true,
-    overriddenSchedule: subscribedSchedule
+    isRest: isRest,
+    dayType: isRest ? "rest" : "work",
+    weekday: cell ? cell.weekday : -1,
+    title: isRest ? weeklyRestTitle(cell, language) : "",
+    sourceId: "builtin-weekly-schedule"
   }
 }
 
-function effectiveDayType(cell, schedule) {
+// The transition is deliberately explicit: a subscribed 班 record on a base
+// rest day is make-up work (rest -> work), while a subscribed 休 record on a
+// base workday creates a holiday (work -> rest).
+function scheduleTransition(basePolicy, schedule) {
+  if (!schedule) return basePolicy.isRest ? "base-rest" : "base-work"
+  if (schedule.status === "conflict") return "conflict"
+  var from = basePolicy.isRest ? "rest" : "work"
+  var to = schedule.status === "off" ? "rest" : "work"
+  return from + "-to-" + to
+}
+
+function effectiveDayType(basePolicy, schedule) {
   if (schedule) {
-    if (schedule.weekendOverride) return "weekend-off"
-    if (schedule.status === "off") return "official-off"
-    if (schedule.status === "work") return "makeup-work"
     if (schedule.status === "conflict") return "schedule-conflict"
+    if (schedule.status === "off")
+      return basePolicy.isRest ? "scheduled-rest" : "official-off"
+    if (schedule.status === "work")
+      return basePolicy.isRest ? "makeup-work" : "scheduled-work"
   }
-  return cell.weekend ? "weekend" : "weekday"
+  return basePolicy.isRest ? "regular-rest" : "weekday"
+}
+
+function effectiveBadge(basePolicy, schedule) {
+  if (schedule) {
+    return {
+      text: String(schedule.badge || ""),
+      role: String(schedule.status || ""),
+      origin: "subscription"
+    }
+  }
+  if (basePolicy.isRest) return { text: "休", role: "off", origin: "base-week" }
+  return { text: "", role: "", origin: "none" }
 }
 
 function projectDay(cell, snapshot, language, showJieqi, options, model) {
@@ -270,26 +290,31 @@ function projectDay(cell, snapshot, language, showJieqi, options, model) {
     builtinFestivalRecords(lunarInfo, language, calendarModel),
     bucket.festivals
   )
-  var subscribedSchedule = resolveSchedule(bucket.schedule)
-  var schedule = applyWeekendRule(cell, subscribedSchedule, projectionOptions, language)
+  var basePolicy = baseWeekPolicy(cell, projectionOptions, language)
+  var schedule = resolveSchedule(bucket.schedule)
+  var transition = scheduleTransition(basePolicy, schedule)
+  var badge = effectiveBadge(basePolicy, schedule)
   var events = sortEvents(bucket.events)
 
   var projected = {}
   for (var key in cell) projected[key] = cell[key]
 
   projected.lunar = lunarInfo
-  projected.subscribedSchedule = subscribedSchedule
+  projected.basePolicy = basePolicy
   projected.schedule = schedule
   projected.festivals = festivals
   projected.events = events
   projected.presentation = {
-    effectiveDayType: effectiveDayType(cell, schedule),
+    baseDayType: basePolicy.dayType,
+    effectiveDayType: effectiveDayType(basePolicy, schedule),
+    scheduleTransition: transition,
+    scheduleOrigin: badge.origin,
+    changesBase: transition === "rest-to-work" || transition === "work-to-rest",
     caption: chooseCaption(festivals, lunarInfo, language, showJieqi, calendarModel),
-    badgeText: schedule ? schedule.badge : "",
-    badgeRole: schedule ? schedule.status : "",
+    badgeText: badge.text,
+    badgeRole: badge.role,
     eventCount: events.length,
-    eventDotCount: Math.min(3, events.length),
-    weekendOverride: schedule ? schedule.weekendOverride === true : false
+    eventDotCount: Math.min(3, events.length)
   }
   return projected
 }
@@ -316,7 +341,9 @@ if (typeof module !== "undefined") {
     builtinFestivalRecords: builtinFestivalRecords,
     mergeFestivals: mergeFestivals,
     resolveSchedule: resolveSchedule,
-    applyWeekendRule: applyWeekendRule,
+    baseWeekPolicy: baseWeekPolicy,
+    scheduleTransition: scheduleTransition,
+    effectiveDayType: effectiveDayType,
     projectDay: projectDay,
     projectWeeks: projectWeeks
   }

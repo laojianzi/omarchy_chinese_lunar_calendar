@@ -23,14 +23,15 @@ this plugin adds lunar facts and typed subscription overlays on top.
   festivals, and calendar events in separate rendering channels.
 - `休` and `班` colors support theme-aware `auto` defaults or custom
   `#RRGGBB` values; badge text contrast is selected automatically.
-- Independent Saturday/Sunday rules can force every selected weekday to `休`,
-  retaining any overridden subscribed `班` record in the day-details view.
+- Saturday/Sunday settings define the base weekly work/rest schedule. A
+  date-specific subscribed `休` or `班` record takes precedence, so `班`
+  correctly cancels a regular rest day for make-up work.
 - Subscription snapshots refresh outside the long-lived shell and fall back to
   the last known-good data when a source fails.
 - Omarchy's native Widget Settings now exposes the official holiday URL,
   automatic-update policy, and refresh intervals. A built-in advanced manager
   can still add, edit, enable, disable, or remove multiple typed sources.
-- Top-right actions expose **Subscriptions** directly and keep general options under the gear:
+- The top-right **Settings** gear opens all calendar options:
   - **Language** — Simplified Chinese, Traditional Chinese, or English.
     Defaults to whatever your system locale implies (`zh_CN`-family ->
     Simplified, `zh_TW`/`zh_HK`/`zh_MO` -> Traditional, otherwise English).
@@ -38,8 +39,7 @@ this plugin adds lunar facts and typed subscription overlays on top.
     Monday-first and Sunday-first week (same toggle the "W" column header
     already offered, just made visible as an explicit option).
   - **Show solar terms** — toggles the jieqi caption on/off.
-  - **Subscriptions** — the link icon opens source URLs and automatic-update settings directly.
-  - **Manage subscriptions** — the same entry is pinned at the top of the gear menu.
+  - **Subscriptions and automatic updates** — the first settings item opens the advanced source manager.
 
 <p float="left">
   <img src="screenshots/options.png" alt="Options panel" width="320" />
@@ -97,8 +97,8 @@ git -C ~/.config/omarchy/plugins/garyliu.lunar-calendar remote set-url origin \
 omarchy plugin update garyliu.lunar-calendar --yes
 ```
 
-Reopen the panel after the plugin reload. A link icon appears beside the gear,
-and the gear menu starts with **Subscriptions and automatic updates**.
+Reopen the panel after the plugin reload. Open the top-right gear; the settings
+page starts with **Subscriptions and automatic updates**.
 
 ## Removal
 
@@ -120,6 +120,14 @@ is normalized into one of three record kinds before QML sees it:
 - `event` — a timed or all-day occurrence; rendered as dots in the month grid
   and listed in the per-day details overlay.
 
+Work/rest state is projected in two stages:
+
+1. `saturdayIsRest` and `sundayIsRest` establish the ordinary weekly baseline.
+2. A date-specific subscribed `schedule` record is applied afterwards and wins.
+   `off` changes the effective date to `休`; `work` changes it to `班`. A `work`
+   record on a base rest day is therefore a real make-up workday, not a weekend
+   setting that can be overwritten locally.
+
 The default source uses `holiday-cn-json`. A second adapter,
 `calendar-feed-v1`, accepts an explicitly typed JSON feed for schedules,
 festivals, and events. Generic ICS is intentionally not guessed from event
@@ -127,13 +135,13 @@ summaries; it should be added through a dedicated adapter that preserves UID,
 recurrence, time-zone, and all-day semantics.
 
 Use Omarchy's native Widget Settings for the official holiday URL, automatic
-update policy, Saturday/Sunday rest overrides, and `休` / `班` colors. The same
-weekend and color controls are available in the calendar's gear menu. For
-multiple sources, open the calendar and click the
-visible **Subscriptions / 订阅** button in the top-right; the same entry is
-pinned at the top of the gear menu, `S` opens it from the keyboard, and the IPC
-method `garyliu.lunar-calendar subscriptions` opens it directly. The advanced
-settings UI supports:
+update policy, Saturday/Sunday base rest days, and `休` / `班` colors. The same
+weekly-baseline and color controls are available in the calendar's gear menu.
+Date-specific subscribed `休` / `班` records always take precedence. For
+multiple sources, open the calendar, click the top-right gear, and select
+**Subscriptions and automatic updates**, which is pinned as the first settings
+item. The IPC method `garyliu.lunar-calendar subscriptions` remains available
+for automation. The advanced settings UI supports:
 
 - the built-in China statutory holiday preset;
 - custom `calendar-feed-v1` HTTPS or local-file addresses;
