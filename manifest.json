@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "garyliu.lunar-calendar",
   "name": "Lunar Calendar",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": "Gary Liu",
   "license": "MIT",
   "description": "Chinese lunar calendar with typed schedule, festival, and event subscriptions",
@@ -16,7 +16,81 @@
     "displayName": "Lunar Calendar",
     "description": "Chinese lunar calendar with typed subscription overlays",
     "category": "Time",
-    "allowMultiple": false
+    "allowMultiple": false,
+    "defaults": {
+      "showSubscriptions": true,
+      "subscriptionAutoUpdate": true,
+      "subscriptionRefreshOnStartup": true,
+      "subscriptionRefreshOnOpen": true,
+      "subscriptionCheckIntervalMinutes": 60,
+      "subscriptionOfficialEnabled": true,
+      "subscriptionOfficialUrlTemplate": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json",
+      "subscriptionOfficialRefreshHours": 24
+    },
+    "schema": [
+      {
+        "key": "showSubscriptions",
+        "type": "boolean",
+        "label": "Show subscription data",
+        "description": "Render work/rest schedules, subscribed festivals, and events in the calendar.",
+        "defaultValue": true
+      },
+      {
+        "key": "subscriptionOfficialEnabled",
+        "type": "boolean",
+        "label": "China statutory holiday source",
+        "description": "Enable the built-in structured source for official days off and make-up workdays.",
+        "defaultValue": true
+      },
+      {
+        "key": "subscriptionOfficialUrlTemplate",
+        "type": "string",
+        "label": "Holiday JSON URL template",
+        "description": "HTTPS holiday-cn-json template. Keep the literal {year} placeholder.",
+        "defaultValue": "https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/{year}.json"
+      },
+      {
+        "key": "subscriptionOfficialRefreshHours",
+        "type": "integer",
+        "label": "Holiday source refresh period (hours)",
+        "description": "Minimum age before the official source is checked again.",
+        "min": 1,
+        "max": 168,
+        "step": 1,
+        "defaultValue": 24
+      },
+      {
+        "key": "subscriptionAutoUpdate",
+        "type": "boolean",
+        "label": "Automatic subscription updates",
+        "description": "Master switch for startup, open, and periodic background checks. Manual refresh remains available.",
+        "defaultValue": true
+      },
+      {
+        "key": "subscriptionCheckIntervalMinutes",
+        "type": "integer",
+        "label": "Background check interval (minutes)",
+        "description": "How often the shell asks the helper to check for stale sources.",
+        "min": 15,
+        "max": 1440,
+        "step": 15,
+        "defaultValue": 60
+      },
+      {
+        "key": "subscriptionRefreshOnStartup",
+        "type": "boolean",
+        "label": "Check after shell startup",
+        "description": "Check stale subscription sources after Omarchy Shell starts.",
+        "defaultValue": true
+      },
+      {
+        "key": "subscriptionRefreshOnOpen",
+        "type": "boolean",
+        "label": "Check when calendar opens",
+        "description": "Check stale subscription sources when the calendar popup opens.",
+        "defaultValue": true
+      }
+    ]
   },
   "omarchy": {
     "clonedFrom": "omarchy.clock"

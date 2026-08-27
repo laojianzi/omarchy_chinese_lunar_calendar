@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "ConfigModel.js" as ConfigModel
+import "NativeSettings.js" as NativeSettings
 
 // Runtime-facing half of the subscription layer. Network, parsing, schema
 // migration and atomic writes live in bin/calendar-subscription-sync; the
@@ -109,9 +110,9 @@ QtObject {
 
   function refreshIfStale(reason) {
     var trigger = String(reason || "manual")
+    if ((trigger === "startup" || trigger === "open" || trigger === "periodic") && !root.autoUpdate) return
     if (trigger === "startup" && !root.refreshOnStartup) return
     if (trigger === "open" && !root.refreshOnOpen) return
-    if (trigger === "periodic" && !root.autoUpdate) return
     root.refresh(false)
   }
 
@@ -140,6 +141,18 @@ QtObject {
 
   function resetConfig() {
     return root.saveConfig(ConfigModel.defaultConfig(), true)
+  }
+
+  function applyWidgetSettings(settings) {
+    if (!root.configLoaded || root.busy) return false
+    try {
+      var next = ConfigModel.normalizeConfig(NativeSettings.applyToConfig(root.config, settings))
+      if (JSON.stringify(next) === JSON.stringify(root.config)) return true
+      return root.saveConfig(next, true)
+    } catch (error) {
+      root.configError = String(error)
+      return false
+    }
   }
 
   property FileView snapshotFile: FileView {

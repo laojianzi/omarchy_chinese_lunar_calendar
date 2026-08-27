@@ -23,9 +23,9 @@ this plugin adds lunar facts and typed subscription overlays on top.
   festivals, and calendar events in separate rendering channels.
 - Subscription snapshots refresh outside the long-lived shell and fall back to
   the last known-good data when a source fails.
-- A built-in subscription manager can add, edit, enable, disable, or remove
-  sources; configure startup/open/periodic refresh; show source health; and
-  trigger an immediate refresh without editing JSON.
+- Omarchy's native Widget Settings now exposes the official holiday URL,
+  automatic-update policy, and refresh intervals. A built-in advanced manager
+  can still add, edit, enable, disable, or remove multiple typed sources.
 - Top-right actions expose **Subscriptions** directly and keep general options under the gear:
   - **Language** — Simplified Chinese, Traditional Chinese, or English.
     Defaults to whatever your system locale implies (`zh_CN`-family ->
@@ -122,9 +122,12 @@ festivals, and events. Generic ICS is intentionally not guessed from event
 summaries; it should be added through a dedicated adapter that preserves UID,
 recurrence, time-zone, and all-day semantics.
 
-Open the calendar and click the **Subscriptions** link icon in the top-right.
-The same entry is pinned at the top of the gear menu, and `S` opens it from
-the keyboard. The settings UI supports:
+Use Omarchy's native Widget Settings for the official holiday URL and basic
+automatic-update policy. For multiple sources, open the calendar and click the
+visible **Subscriptions / 订阅** button in the top-right; the same entry is
+pinned at the top of the gear menu, `S` opens it from the keyboard, and the IPC
+method `garyliu.lunar-calendar subscriptions` opens it directly. The advanced
+settings UI supports:
 
 - the built-in China statutory holiday preset;
 - custom `calendar-feed-v1` HTTPS or local-file addresses;
