@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "../subscriptions/PresentationSettings.js" as PresentationSettings
 
 Rectangle {
   id: root
@@ -10,6 +11,9 @@ Rectangle {
   required property string fontFamily
   required property int cellWidth
   required property int cellHeight
+  required property color restColor
+  required property color workColor
+  required property color conflictColor
 
   signal activated(var day)
 
@@ -24,22 +28,23 @@ Rectangle {
 
   function badgeFill() {
     var role = day.presentation ? day.presentation.badgeRole : ""
-    return role === "work"
-      ? Style.normalFillFor(root.foreground, Color.accent)
-      : Style.selectedFillFor(root.foreground, Color.accent)
+    if (role === "off") return root.restColor
+    if (role === "work") return root.workColor
+    if (role === "conflict") return root.conflictColor
+    return Style.selectedFillFor(root.foreground, Color.accent)
   }
 
   function badgeTextColor() {
-    var role = day.presentation ? day.presentation.badgeRole : ""
-    return role === "work" ? root.foreground : Color.popups.background
+    var fill = root.badgeFill()
+    return PresentationSettings.contrastTextForRgb(fill.r, fill.g, fill.b)
   }
 
   function dateColor() {
     if (!day.inMonth) return Qt.darker(root.foreground, 2.2)
     var type = day.presentation ? day.presentation.effectiveDayType : (day.weekend ? "weekend" : "weekday")
-    if (type === "official-off") return Style.selectedStateColor(root.foreground, Color.accent)
-    if (type === "makeup-work") return root.foreground
-    if (type === "schedule-conflict") return Style.selectedStateColor(root.foreground, Color.accent)
+    if (type === "official-off" || type === "weekend-off") return root.restColor
+    if (type === "makeup-work") return root.workColor
+    if (type === "schedule-conflict") return root.conflictColor
     return type === "weekend" ? Qt.darker(root.foreground, 1.45) : root.foreground
   }
 

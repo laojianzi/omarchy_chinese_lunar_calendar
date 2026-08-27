@@ -212,8 +212,47 @@ function sortEvents(events) {
   return out
 }
 
+function projectionArgs(options, model) {
+  if (!model && options && typeof options.computeLunarInfo === "function")
+    return { options: {}, model: options }
+  return { options: options && typeof options === "object" ? options : {}, model: model }
+}
+
+function weekendRuleEnabled(cell, options) {
+  if (!cell) return false
+  if (cell.weekday === 6) return options.saturdayIsRest === true
+  if (cell.weekday === 0) return options.sundayIsRest === true
+  return false
+}
+
+function weekendRuleTitle(cell, language) {
+  var saturday = cell && cell.weekday === 6
+  if (language === "en") return saturday ? "Saturday rest" : "Sunday rest"
+  if (language === "zh-Hant") return saturday ? "週六休息" : "週日休息"
+  return saturday ? "周六休息" : "周日休息"
+}
+
+// A user-enabled weekend rule is an intentional local override. If a
+// subscribed source says 班 on that weekday, retain the original record
+// for details but render the effective state as 休, exactly as configured.
+function applyWeekendRule(cell, subscribedSchedule, options, language) {
+  if (!weekendRuleEnabled(cell, options)) return subscribedSchedule
+  if (subscribedSchedule && subscribedSchedule.status === "off") return subscribedSchedule
+  return {
+    status: "off",
+    title: weekendRuleTitle(cell, language),
+    badge: "休",
+    sourceId: "builtin-weekend-policy",
+    conflict: false,
+    candidates: [],
+    weekendOverride: true,
+    overriddenSchedule: subscribedSchedule
+  }
+}
+
 function effectiveDayType(cell, schedule) {
   if (schedule) {
+    if (schedule.weekendOverride) return "weekend-off"
     if (schedule.status === "off") return "official-off"
     if (schedule.status === "work") return "makeup-work"
     if (schedule.status === "conflict") return "schedule-conflict"
@@ -221,35 +260,42 @@ function effectiveDayType(cell, schedule) {
   return cell.weekend ? "weekend" : "weekday"
 }
 
-function projectDay(cell, snapshot, language, showJieqi, model) {
+function projectDay(cell, snapshot, language, showJieqi, options, model) {
+  var args = projectionArgs(options, model)
+  var projectionOptions = args.options
+  var calendarModel = args.model
   var bucket = bucketFor(snapshot, cell.key)
-  var lunarInfo = model.computeLunarInfo(cell.year, cell.month + 1, cell.day)
+  var lunarInfo = calendarModel.computeLunarInfo(cell.year, cell.month + 1, cell.day)
   var festivals = mergeFestivals(
-    builtinFestivalRecords(lunarInfo, language, model),
+    builtinFestivalRecords(lunarInfo, language, calendarModel),
     bucket.festivals
   )
-  var schedule = resolveSchedule(bucket.schedule)
+  var subscribedSchedule = resolveSchedule(bucket.schedule)
+  var schedule = applyWeekendRule(cell, subscribedSchedule, projectionOptions, language)
   var events = sortEvents(bucket.events)
 
   var projected = {}
   for (var key in cell) projected[key] = cell[key]
 
   projected.lunar = lunarInfo
+  projected.subscribedSchedule = subscribedSchedule
   projected.schedule = schedule
   projected.festivals = festivals
   projected.events = events
   projected.presentation = {
     effectiveDayType: effectiveDayType(cell, schedule),
-    caption: chooseCaption(festivals, lunarInfo, language, showJieqi, model),
+    caption: chooseCaption(festivals, lunarInfo, language, showJieqi, calendarModel),
     badgeText: schedule ? schedule.badge : "",
     badgeRole: schedule ? schedule.status : "",
     eventCount: events.length,
-    eventDotCount: Math.min(3, events.length)
+    eventDotCount: Math.min(3, events.length),
+    weekendOverride: schedule ? schedule.weekendOverride === true : false
   }
   return projected
 }
 
-function projectWeeks(baseWeeks, snapshot, language, showJieqi, model) {
+function projectWeeks(baseWeeks, snapshot, language, showJieqi, options, model) {
+  var args = projectionArgs(options, model)
   var projectedWeeks = []
   var weeks = array(baseWeeks)
 
@@ -257,7 +303,7 @@ function projectWeeks(baseWeeks, snapshot, language, showJieqi, model) {
     var days = []
     var baseDays = array(weeks[w].days)
     for (var d = 0; d < baseDays.length; d++)
-      days.push(projectDay(baseDays[d], snapshot, language, showJieqi, model))
+      days.push(projectDay(baseDays[d], snapshot, language, showJieqi, args.options, args.model))
     projectedWeeks.push({ week: weeks[w].week, days: days })
   }
 
@@ -270,6 +316,7 @@ if (typeof module !== "undefined") {
     builtinFestivalRecords: builtinFestivalRecords,
     mergeFestivals: mergeFestivals,
     resolveSchedule: resolveSchedule,
+    applyWeekendRule: applyWeekendRule,
     projectDay: projectDay,
     projectWeeks: projectWeeks
   }
