@@ -202,4 +202,94 @@ assert.strictEqual(conflictedSaturday.presentation.badgeText, '!')
 assert.strictEqual(conflictedSaturday.presentation.scheduleTransition, 'conflict')
 assert.strictEqual(conflictedSaturday.presentation.effectiveDayType, 'schedule-conflict')
 
+// Leading/trailing dates are part of the visible 42-day window. Projection must
+// preserve all semantic layers even when the date belongs to an adjacent month.
+const trailingSeptemberSaturday = {
+  ...saturdayCell,
+  key: '2026-09-05',
+  year: 2026,
+  month: 8,
+  day: 5,
+  inMonth: false
+}
+const adjacentSnapshot = {
+  schemaVersion: 1,
+  byDate: {
+    '2026-09-05': {
+      schedule: [
+        { id: 'september-work', sourceId: 'official', kind: 'schedule', title: '调休补班', priority: 100, payload: { status: 'work' } }
+      ],
+      festivals: [
+        { id: 'adjacent-festival', sourceId: 'remote', kind: 'festival', title: '纪念日', priority: 20, payload: { festivalId: 'custom.adjacent' } }
+      ],
+      events: [
+        { id: 'adjacent-event', sourceId: 'personal', kind: 'event', title: '跨月事件', priority: 0, span: { mode: 'date', start: '2026-09-05', endExclusive: '2026-09-06' } }
+      ]
+    }
+  }
+}
+const adjacentProjected = Projection.projectDay(
+  trailingSeptemberSaturday,
+  adjacentSnapshot,
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model
+)
+assert.strictEqual(adjacentProjected.presentation.monthScope, 'adjacent-month')
+assert.strictEqual(adjacentProjected.presentation.isAdjacentMonth, true)
+assert.strictEqual(adjacentProjected.schedule.status, 'work')
+assert.strictEqual(adjacentProjected.presentation.badgeText, '班')
+assert.strictEqual(adjacentProjected.presentation.scheduleTransition, 'rest-to-work')
+assert.strictEqual(adjacentProjected.events.length, 1)
+assert.strictEqual(adjacentProjected.presentation.eventDotCount, 1)
+assert.strictEqual(adjacentProjected.festivals[0].title, '纪念日')
+
+// An adjacent-month weekend without a subscribed override still keeps the base
+// weekly rest badge instead of becoming visually empty.
+const adjacentBaseRest = Projection.projectDay(
+  { ...trailingSeptemberSaturday, key: '2026-09-06', day: 6, weekday: 0 },
+  { schemaVersion: 1, byDate: {} },
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model
+)
+assert.strictEqual(adjacentBaseRest.presentation.monthScope, 'adjacent-month')
+assert.strictEqual(adjacentBaseRest.presentation.badgeText, '休')
+assert.strictEqual(adjacentBaseRest.presentation.scheduleOrigin, 'base-week')
+
+// Cross-year cells use the same date-key lookup and must not lose subscribed
+// state at the December/January boundary.
+const januaryCrossYear = Projection.projectDay(
+  {
+    ...weekdayCell,
+    key: '2027-01-01',
+    year: 2027,
+    month: 0,
+    day: 1,
+    weekday: 5,
+    inMonth: false
+  },
+  {
+    schemaVersion: 1,
+    byDate: {
+      '2027-01-01': {
+        schedule: [
+          { id: 'new-year-off', sourceId: 'official', kind: 'schedule', title: '元旦', priority: 100, payload: { status: 'off' } }
+        ],
+        festivals: [],
+        events: []
+      }
+    }
+  },
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model
+)
+assert.strictEqual(januaryCrossYear.presentation.monthScope, 'adjacent-month')
+assert.strictEqual(januaryCrossYear.presentation.badgeText, '休')
+assert.strictEqual(januaryCrossYear.presentation.effectiveDayType, 'official-off')
+
 console.log('projection tests passed')

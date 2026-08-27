@@ -280,6 +280,13 @@ function effectiveBadge(basePolicy, schedule) {
   return { text: "", role: "", origin: "none" }
 }
 
+// The month grid is a visible civil-date window. Leading/trailing dates from
+// adjacent months receive the same projection as current-month dates; this
+// metadata is only a presentation hint for de-emphasis.
+function monthScope(cell) {
+  return cell && cell.inMonth === false ? "adjacent-month" : "current-month"
+}
+
 function projectDay(cell, snapshot, language, showJieqi, options, model) {
   var args = projectionArgs(options, model)
   var projectionOptions = args.options
@@ -304,7 +311,10 @@ function projectDay(cell, snapshot, language, showJieqi, options, model) {
   projected.schedule = schedule
   projected.festivals = festivals
   projected.events = events
+  var scope = monthScope(cell)
   projected.presentation = {
+    monthScope: scope,
+    isAdjacentMonth: scope === "adjacent-month",
     baseDayType: basePolicy.dayType,
     effectiveDayType: effectiveDayType(basePolicy, schedule),
     scheduleTransition: transition,
@@ -344,6 +354,7 @@ if (typeof module !== "undefined") {
     baseWeekPolicy: baseWeekPolicy,
     scheduleTransition: scheduleTransition,
     effectiveDayType: effectiveDayType,
+    monthScope: monthScope,
     projectDay: projectDay,
     projectWeeks: projectWeeks
   }

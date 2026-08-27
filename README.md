@@ -21,6 +21,10 @@ this plugin adds lunar facts and typed subscription overlays on top.
   weekday/month names).
 - Typed subscription overlays keep work schedules (`休` / `班`), cultural
   festivals, and calendar events in separate rendering channels.
+- The fixed 6×7 month viewport treats all 42 visible dates as first-class
+  calendar cells. Leading and trailing dates from adjacent months keep their
+  `休` / `班` badges, festival captions, event dots, and click-through details;
+  only visual emphasis is reduced.
 - `休` and `班` colors support theme-aware `auto` defaults or custom
   `#RRGGBB` values; badge text contrast is selected automatically.
 - Saturday/Sunday settings define the base weekly work/rest schedule. A
@@ -127,6 +131,19 @@ Work/rest state is projected in two stages:
    `off` changes the effective date to `休`; `work` changes it to `班`. A `work`
    record on a base rest day is therefore a real make-up workday, not a weekend
    setting that can be overwritten locally.
+
+### Month viewport semantics
+
+A month page is a 42-date viewport, not a filter that owns only the numbered
+month. Projection, work/rest resolution, festival merging, and event lookup run
+for every visible date key, including the previous-month and next-month cells at
+the edges of the grid.
+
+`inMonth` is therefore presentation metadata only. Current-month cells use full
+emphasis; adjacent-month cells are dimmed, while semantic indicators remain
+visible at a stronger opacity so a cross-month `班`, `休`, conflict, or event is
+never silently hidden. Clicking an adjacent-month cell opens the same full date
+details as any other cell.
 
 The default source uses `holiday-cn-json`. A second adapter,
 `calendar-feed-v1`, accepts an explicitly typed JSON feed for schedules,
