@@ -379,7 +379,6 @@ Panel {
         else if (t === "}") root.moveYear(1)
         else if (t === "t" || t === "T") root.goToToday()
         else if (t === "w" || t === "W") root.toggleWeekStart()
-        else if (t === "s" || t === "S") root.openSubscriptionSettings()
         else if (t === "o" || t === "O") root.openOptions()
       }
 
@@ -449,34 +448,16 @@ Panel {
               }
             }
 
-            Row {
+            PanelActionButton {
               anchors.right: parent.right
               anchors.top: parent.top
-              anchors.rightMargin: -Style.space(4)
-              anchors.topMargin: -Style.space(2)
-              spacing: Style.space(4)
-
-              Button {
-                text: root.language === "en" ? "Subscriptions" : (root.language === "zh-Hant" ? "訂閱" : "订阅")
-                tooltipText: root.language === "en"
-                  ? "Manage subscription sources and automatic updates"
-                  : (root.language === "zh-Hant" ? "管理訂閱來源與自動更新" : "管理订阅源与自动更新")
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-                focusable: true
-                bordered: true
-                horizontalPadding: Style.space(8)
-                verticalPadding: Style.space(4)
-                onClicked: root.openSubscriptionSettings()
-              }
-
-              PanelActionButton {
-                iconText: "⚙"
-                tooltipText: root.langCfg.optionsButtonTooltip
-                foreground: root.contentForeground
-                fontFamily: root.contentFontFamily
-                onClicked: root.openOptions()
-              }
+              anchors.rightMargin: Style.space(10)
+              anchors.topMargin: Style.space(2)
+              iconText: "⚙"
+              tooltipText: root.langCfg.optionsButtonTooltip
+              foreground: root.contentForeground
+              fontFamily: root.contentFontFamily
+              onClicked: root.openOptions()
             }
           }
 
@@ -970,9 +951,6 @@ Panel {
           if (event.key === Qt.Key_Escape) {
             root.closeOptions()
             event.accepted = true
-          } else if (event.key === Qt.Key_S) {
-            root.openSubscriptionSettings()
-            event.accepted = true
           }
         }
 
@@ -1040,10 +1018,10 @@ Panel {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: root.language === "en"
-                  ? "Configure China holiday data, typed calendar feeds, refresh intervals, startup/open refresh, and manual updates. Shortcut: S."
+                  ? "Configure China holiday data, typed calendar feeds, refresh intervals, startup/open refresh, and manual updates."
                   : (root.language === "zh-Hant"
-                    ? "設定中國班休、類型化日曆訂閱、更新週期、啟動/開啟時更新與手動重新整理。快捷鍵：S。"
-                    : "配置中国班休、类型化日历订阅、更新周期、启动/打开时更新与手动刷新。快捷键：S。")
+                    ? "設定中國班休、類型化日曆訂閱、更新週期、啟動/開啟時更新與手動重新整理。"
+                    : "配置中国班休、类型化日历订阅、更新周期、启动/打开时更新与手动刷新。")
                 color: Qt.darker(root.contentForeground, 1.45)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.caption
