@@ -397,13 +397,17 @@ Panel {
               anchors.topMargin: -Style.space(2)
               spacing: Style.space(4)
 
-              PanelActionButton {
-                iconText: "󰌹"
+              Button {
+                text: root.language === "en" ? "Subscriptions" : (root.language === "zh-Hant" ? "訂閱" : "订阅")
                 tooltipText: root.language === "en"
-                  ? "Manage subscriptions"
-                  : (root.language === "zh-Hant" ? "管理訂閱" : "管理订阅")
+                  ? "Manage subscription sources and automatic updates"
+                  : (root.language === "zh-Hant" ? "管理訂閱來源與自動更新" : "管理订阅源与自动更新")
                 foreground: root.contentForeground
                 fontFamily: root.contentFontFamily
+                focusable: true
+                bordered: true
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(4)
                 onClicked: root.openSubscriptionSettings()
               }
 

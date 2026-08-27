@@ -5,6 +5,7 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 import "subscriptions" as Subscriptions
+import "subscriptions/NativeSettings.js" as NativeSettings
 
 // Date/time label for the bar, and the host for the lunar calendar popup.
 //
@@ -19,6 +20,32 @@ BarWidget {
 
   Subscriptions.SubscriptionStore {
     id: subscriptionStore
+  }
+
+  property bool nativeSettingsReady: false
+  property bool syncingNativeSettings: false
+
+  function syncNativeSettingsFromStore() {
+    if (!subscriptionStore.configLoaded) return
+    var values = NativeSettings.settingsFromConfig(subscriptionStore.config)
+    root.nativeSettingsReady = true
+    if (!NativeSettings.differs(root.settings, values)) return
+
+    root.syncingNativeSettings = true
+    var entry = NativeSettings.mergeIntoEntry(root.settings, values, root.moduleName)
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+    root.syncingNativeSettings = false
+  }
+
+  function applyNativeSettingsToStore() {
+    if (!root.nativeSettingsReady || root.syncingNativeSettings || !subscriptionStore.configLoaded) return
+    if (subscriptionStore.busy) {
+      nativeSettingsApplyTimer.restart()
+      return
+    }
+    subscriptionStore.applyWidgetSettings(root.settings)
   }
 
   // Read from the same shell.json entry the Panel writes language to, so
@@ -90,6 +117,12 @@ BarWidget {
     if (panelLoader.item) panelLoader.item.toggleWeekStart()
   }
 
+  function openSubscriptionSettings() {
+    if (!panelLoader.item) return
+    panelLoader.item.open()
+    panelLoader.item.openSubscriptionSettings()
+  }
+
   readonly property real openPanelIndicatorWidth: button.labelWidth
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
 
@@ -113,7 +146,35 @@ BarWidget {
   implicitHeight: button.implicitHeight
 
   onBarChanged: injectPanel()
-  onSettingsChanged: injectPanel()
+  onSettingsChanged: {
+    injectPanel()
+    if (root.nativeSettingsReady && !root.syncingNativeSettings)
+      nativeSettingsApplyTimer.restart()
+  }
+
+  Connections {
+    target: subscriptionStore
+
+    function onConfigLoadedChanged() {
+      if (subscriptionStore.configLoaded) root.syncNativeSettingsFromStore()
+    }
+
+    function onConfigRevisionChanged() {
+      root.syncNativeSettingsFromStore()
+    }
+
+    function onBusyChanged() {
+      if (!subscriptionStore.busy && nativeSettingsApplyTimer.running)
+        nativeSettingsApplyTimer.restart()
+    }
+  }
+
+  Timer {
+    id: nativeSettingsApplyTimer
+    interval: 120
+    repeat: false
+    onTriggered: root.applyNativeSettingsToStore()
+  }
 
   SystemClock {
     id: clock
@@ -138,6 +199,7 @@ BarWidget {
     function refresh(): void { root.broadcast("refresh") }
     function cycleFormat(): void { root.cycleFormat() }
     function toggleWeekStart(): void { root.toggleWeekStart() }
+    function subscriptions(): void { root.openSubscriptionSettings() }
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }
