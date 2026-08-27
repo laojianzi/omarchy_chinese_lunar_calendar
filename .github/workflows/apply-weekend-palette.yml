@@ -1,0 +1,1255 @@
+name: Apply weekend policy and badge palette settings
+
+on:
+  push:
+    branches:
+      - fix/native-subscription-settings
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/native-subscription-settings
+          fetch-depth: 0
+
+      - name: Implement configurable work/rest presentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f"missing patch anchor: {label}")
+              return text.replace(old, new, 1)
+
+          # Native Omarchy settings.
+          manifest_path = Path("manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["version"] = "1.4.0"
+          widget = manifest.setdefault("barWidget", {})
+          defaults = widget.setdefault("defaults", {})
+          defaults.update({
+              "saturdayIsRest": False,
+              "sundayIsRest": False,
+              "restBadgeColor": "auto",
+              "workBadgeColor": "auto",
+          })
+          schema = [item for item in widget.get("schema", []) if item.get("key") not in {
+              "saturdayIsRest", "sundayIsRest", "restBadgeColor", "workBadgeColor"
+          }]
+          insertion = 1 if schema and schema[0].get("key") == "showSubscriptions" else 0
+          presentation_schema = [
+              {
+                  "key": "saturdayIsRest",
+                  "type": "boolean",
+                  "label": "Always mark Saturday as rest",
+                  "description": "Show 休 on every Saturday. This local rule overrides subscribed 班 records for Saturdays.",
+                  "defaultValue": False,
+              },
+              {
+                  "key": "sundayIsRest",
+                  "type": "boolean",
+                  "label": "Always mark Sunday as rest",
+                  "description": "Show 休 on every Sunday. This local rule overrides subscribed 班 records for Sundays.",
+                  "defaultValue": False,
+              },
+              {
+                  "key": "restBadgeColor",
+                  "type": "string",
+                  "label": "Rest badge color",
+                  "description": "Use auto or #RRGGBB. Auto selects an accessible red for the current light or dark theme.",
+                  "defaultValue": "auto",
+              },
+              {
+                  "key": "workBadgeColor",
+                  "type": "string",
+                  "label": "Work badge color",
+                  "description": "Use auto or #RRGGBB. Auto selects an accessible blue for the current light or dark theme.",
+                  "defaultValue": "auto",
+              },
+          ]
+          widget["schema"] = schema[:insertion] + presentation_schema + schema[insertion:]
+          manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+          Path("subscriptions/PresentationSettings.js").write_text(r'''// Pure helpers for schedule rendering preferences. The QML layer supplies
+          // the current popup background RGB values; this module picks light/dark
+          // defaults, validates user overrides, and chooses readable badge text.
+
+          var AUTO = "auto"
+          var PALETTES = {
+            light: {
+              rest: "#C62828",
+              work: "#1565C0",
+              conflict: "#B45309"
+            },
+            dark: {
+              rest: "#F87171",
+              work: "#60A5FA",
+              conflict: "#FBBF24"
+            }
+          }
+
+          function clamp01(value) {
+            var number = Number(value)
+            if (!isFinite(number)) return 0
+            return Math.max(0, Math.min(1, number))
+          }
+
+          function linearChannel(value) {
+            var channel = clamp01(value)
+            return channel <= 0.04045
+              ? channel / 12.92
+              : Math.pow((channel + 0.055) / 1.055, 2.4)
+          }
+
+          function relativeLuminance(r, g, b) {
+            return 0.2126 * linearChannel(r)
+              + 0.7152 * linearChannel(g)
+              + 0.0722 * linearChannel(b)
+          }
+
+          function isDarkRgb(r, g, b) {
+            return relativeLuminance(r, g, b) < 0.28
+          }
+
+          function isValidColorSetting(value) {
+            var text = String(value === undefined || value === null ? "" : value).trim()
+            return text === "" || text.toLowerCase() === AUTO || /^#[0-9A-Fa-f]{6}$/.test(text)
+          }
+
+          function normalizeColorSetting(value) {
+            var text = String(value === undefined || value === null ? AUTO : value).trim()
+            if (text === "" || text.toLowerCase() === AUTO) return AUTO
+            if (/^#[0-9A-Fa-f]{6}$/.test(text)) return text.toUpperCase()
+            return AUTO
+          }
+
+          function resolveColor(value, role, dark) {
+            var normalized = normalizeColorSetting(value)
+            if (normalized !== AUTO) return normalized
+            var palette = dark ? PALETTES.dark : PALETTES.light
+            return palette[role] || palette.conflict
+          }
+
+          function contrastTextForRgb(r, g, b) {
+            var luminance = relativeLuminance(r, g, b)
+            var whiteContrast = 1.05 / (luminance + 0.05)
+            var darkLuminance = 0.009
+            var darkContrast = (luminance + 0.05) / (darkLuminance + 0.05)
+            return whiteContrast >= darkContrast ? "#FFFFFF" : "#111827"
+          }
+
+          if (typeof module !== "undefined") {
+            module.exports = {
+              AUTO: AUTO,
+              PALETTES: PALETTES,
+              relativeLuminance: relativeLuminance,
+              isDarkRgb: isDarkRgb,
+              isValidColorSetting: isValidColorSetting,
+              normalizeColorSetting: normalizeColorSetting,
+              resolveColor: resolveColor,
+              contrastTextForRgb: contrastTextForRgb
+            }
+          }
+          '''.replace("          ", ""), encoding="utf-8")
+
+          Path("subscriptions/Projection.js").write_text(r'''// Typed calendar-record projection for the month grid.
+          //
+          // Transport adapters normalize every source into one of three semantic kinds:
+          //   schedule  - changes the effective work/rest state of a civil date
+          //   festival  - cultural label; never implies a day off by itself
+          //   event     - user/calendar occurrence; shown as dots and in day details
+          //
+          // QML passes the existing Model.js namespace into projectWeeks(), keeping this
+          // module independent of the lunar implementation and directly testable in Node.
+
+          var EMPTY_BUCKET = { schedule: [], festivals: [], events: [] }
+
+          var FESTIVAL_IDS = {
+            "1-1": "cn.spring-festival",
+            "1-15": "cn.lantern-festival",
+            "2-2": "cn.longtaitou",
+            "3-3": "cn.shangsi-festival",
+            "5-5": "cn.dragon-boat-festival",
+            "7-7": "cn.qixi-festival",
+            "7-15": "cn.ghost-festival",
+            "8-15": "cn.mid-autumn-festival",
+            "9-9": "cn.double-ninth-festival",
+            "12-8": "cn.laba-festival",
+            "12-23": "cn.little-new-year"
+          }
+
+          function array(value) {
+            return Array.isArray(value) ? value : []
+          }
+
+          function number(value, fallback) {
+            var parsed = Number(value)
+            return isFinite(parsed) ? parsed : fallback
+          }
+
+          function copyRecord(record) {
+            var out = {}
+            for (var key in record) out[key] = record[key]
+            return out
+          }
+
+          function recordPriority(record) {
+            return number(record && record.priority, 0)
+          }
+
+          function compareRecords(left, right) {
+            var priorityDelta = recordPriority(right) - recordPriority(left)
+            if (priorityDelta !== 0) return priorityDelta
+            var leftTitle = String(left && left.title || "")
+            var rightTitle = String(right && right.title || "")
+            if (leftTitle < rightTitle) return -1
+            if (leftTitle > rightTitle) return 1
+            var leftId = String(left && left.id || "")
+            var rightId = String(right && right.id || "")
+            if (leftId < rightId) return -1
+            if (leftId > rightId) return 1
+            return 0
+          }
+
+          function bucketFor(snapshot, key) {
+            if (!snapshot || snapshot.schemaVersion !== 1 || !snapshot.byDate) return EMPTY_BUCKET
+            var bucket = snapshot.byDate[key]
+            if (!bucket) return EMPTY_BUCKET
+            return {
+              schedule: array(bucket.schedule),
+              festivals: array(bucket.festivals),
+              events: array(bucket.events)
+            }
+          }
+
+          function builtinFestivalRecords(lunarInfo, language, model) {
+            if (!lunarInfo || !model) return []
+            var cfg = model.langConfig(language)
+            var records = []
+
+            if (lunarInfo.festivalKey && cfg.festivals[lunarInfo.festivalKey]) {
+              records.push({
+                id: "builtin:" + (FESTIVAL_IDS[lunarInfo.festivalKey] || lunarInfo.festivalKey),
+                sourceId: "builtin-lunar",
+                kind: "festival",
+                title: cfg.festivals[lunarInfo.festivalKey],
+                priority: 100,
+                payload: {
+                  festivalId: FESTIVAL_IDS[lunarInfo.festivalKey] || lunarInfo.festivalKey,
+                  calendar: "lunar"
+                }
+              })
+            }
+
+            if (lunarInfo.isEve) {
+              records.push({
+                id: "builtin:cn.new-years-eve",
+                sourceId: "builtin-lunar",
+                kind: "festival",
+                title: cfg.eveName,
+                priority: 110,
+                payload: {
+                  festivalId: "cn.new-years-eve",
+                  calendar: "lunar-rule"
+                }
+              })
+            }
+
+            return records
+          }
+
+          function festivalKey(record) {
+            var payload = record && record.payload ? record.payload : {}
+            return String(payload.festivalId || record.id || (record.sourceId + ":" + record.title))
+          }
+
+          function mergeFestivals(builtin, subscribed) {
+            var merged = []
+            var byKey = {}
+            var all = array(builtin).concat(array(subscribed))
+
+            for (var i = 0; i < all.length; i++) {
+              var record = all[i]
+              if (!record || record.kind && record.kind !== "festival") continue
+              var key = festivalKey(record)
+              var previous = byKey[key]
+              if (!previous || recordPriority(record) > recordPriority(previous)) byKey[key] = record
+            }
+
+            for (var id in byKey) merged.push(copyRecord(byKey[id]))
+            merged.sort(compareRecords)
+            return merged
+          }
+
+          function scheduleStatus(record) {
+            var payload = record && record.payload ? record.payload : {}
+            var status = String(payload.status || record.status || "")
+            return status === "off" || status === "work" ? status : ""
+          }
+
+          function resolveSchedule(records) {
+            var candidates = []
+            var list = array(records)
+
+            for (var i = 0; i < list.length; i++) {
+              var status = scheduleStatus(list[i])
+              if (!status) continue
+              var record = copyRecord(list[i])
+              record.resolvedStatus = status
+              candidates.push(record)
+            }
+
+            if (candidates.length === 0) return null
+            candidates.sort(compareRecords)
+
+            var topPriority = recordPriority(candidates[0])
+            var top = []
+            for (var j = 0; j < candidates.length; j++) {
+              if (recordPriority(candidates[j]) !== topPriority) break
+              top.push(candidates[j])
+            }
+
+            var status = top[0].resolvedStatus
+            var conflict = false
+            for (var k = 1; k < top.length; k++) {
+              if (top[k].resolvedStatus !== status) {
+                conflict = true
+                break
+              }
+            }
+
+            return {
+              status: conflict ? "conflict" : status,
+              title: String(top[0].title || ""),
+              badge: conflict ? "!" : (status === "off" ? "休" : "班"),
+              sourceId: String(top[0].sourceId || ""),
+              conflict: conflict,
+              candidates: top
+            }
+          }
+
+          function lunarFallbackCaption(info, language, showJieqi, model) {
+            if (!info || !model) return ""
+            var cfg = model.langConfig(language)
+
+            if (showJieqi && info.solarTermIndex !== null && info.solarTermIndex !== undefined)
+              return cfg.solarTerms[info.solarTermIndex]
+            if (info.lunarDay === 1)
+              return (info.isLeap ? cfg.leapWord : "") + cfg.monthNames[info.lunarMonth - 1] + cfg.monthWord
+            return cfg.dayNames[info.lunarDay - 1]
+          }
+
+          function chooseCaption(festivals, lunarInfo, language, showJieqi, model) {
+            if (festivals.length > 0) return String(festivals[0].title || "")
+            return lunarFallbackCaption(lunarInfo, language, showJieqi, model)
+          }
+
+          function eventStartKey(record) {
+            var span = record && record.span ? record.span : {}
+            return String(span.start || "")
+          }
+
+          function sortEvents(events) {
+            var out = []
+            var list = array(events)
+            for (var i = 0; i < list.length; i++) {
+              if (!list[i] || list[i].kind && list[i].kind !== "event") continue
+              out.push(copyRecord(list[i]))
+            }
+            out.sort(function(left, right) {
+              var startLeft = eventStartKey(left)
+              var startRight = eventStartKey(right)
+              if (startLeft < startRight) return -1
+              if (startLeft > startRight) return 1
+              return compareRecords(left, right)
+            })
+            return out
+          }
+
+          function projectionArgs(options, model) {
+            if (!model && options && typeof options.computeLunarInfo === "function")
+              return { options: {}, model: options }
+            return { options: options && typeof options === "object" ? options : {}, model: model }
+          }
+
+          function weekendRuleEnabled(cell, options) {
+            if (!cell) return false
+            if (cell.weekday === 6) return options.saturdayIsRest === true
+            if (cell.weekday === 0) return options.sundayIsRest === true
+            return false
+          }
+
+          function weekendRuleTitle(cell, language) {
+            var saturday = cell && cell.weekday === 6
+            if (language === "en") return saturday ? "Saturday rest" : "Sunday rest"
+            if (language === "zh-Hant") return saturday ? "週六休息" : "週日休息"
+            return saturday ? "周六休息" : "周日休息"
+          }
+
+          // A user-enabled weekend rule is an intentional local override. If a
+          // subscribed source says 班 on that weekday, retain the original record
+          // for details but render the effective state as 休, exactly as configured.
+          function applyWeekendRule(cell, subscribedSchedule, options, language) {
+            if (!weekendRuleEnabled(cell, options)) return subscribedSchedule
+            if (subscribedSchedule && subscribedSchedule.status === "off") return subscribedSchedule
+            return {
+              status: "off",
+              title: weekendRuleTitle(cell, language),
+              badge: "休",
+              sourceId: "builtin-weekend-policy",
+              conflict: false,
+              candidates: [],
+              weekendOverride: true,
+              overriddenSchedule: subscribedSchedule
+            }
+          }
+
+          function effectiveDayType(cell, schedule) {
+            if (schedule) {
+              if (schedule.weekendOverride) return "weekend-off"
+              if (schedule.status === "off") return "official-off"
+              if (schedule.status === "work") return "makeup-work"
+              if (schedule.status === "conflict") return "schedule-conflict"
+            }
+            return cell.weekend ? "weekend" : "weekday"
+          }
+
+          function projectDay(cell, snapshot, language, showJieqi, options, model) {
+            var args = projectionArgs(options, model)
+            var projectionOptions = args.options
+            var calendarModel = args.model
+            var bucket = bucketFor(snapshot, cell.key)
+            var lunarInfo = calendarModel.computeLunarInfo(cell.year, cell.month + 1, cell.day)
+            var festivals = mergeFestivals(
+              builtinFestivalRecords(lunarInfo, language, calendarModel),
+              bucket.festivals
+            )
+            var subscribedSchedule = resolveSchedule(bucket.schedule)
+            var schedule = applyWeekendRule(cell, subscribedSchedule, projectionOptions, language)
+            var events = sortEvents(bucket.events)
+
+            var projected = {}
+            for (var key in cell) projected[key] = cell[key]
+
+            projected.lunar = lunarInfo
+            projected.subscribedSchedule = subscribedSchedule
+            projected.schedule = schedule
+            projected.festivals = festivals
+            projected.events = events
+            projected.presentation = {
+              effectiveDayType: effectiveDayType(cell, schedule),
+              caption: chooseCaption(festivals, lunarInfo, language, showJieqi, calendarModel),
+              badgeText: schedule ? schedule.badge : "",
+              badgeRole: schedule ? schedule.status : "",
+              eventCount: events.length,
+              eventDotCount: Math.min(3, events.length),
+              weekendOverride: schedule ? schedule.weekendOverride === true : false
+            }
+            return projected
+          }
+
+          function projectWeeks(baseWeeks, snapshot, language, showJieqi, options, model) {
+            var args = projectionArgs(options, model)
+            var projectedWeeks = []
+            var weeks = array(baseWeeks)
+
+            for (var w = 0; w < weeks.length; w++) {
+              var days = []
+              var baseDays = array(weeks[w].days)
+              for (var d = 0; d < baseDays.length; d++)
+                days.push(projectDay(baseDays[d], snapshot, language, showJieqi, args.options, args.model))
+              projectedWeeks.push({ week: weeks[w].week, days: days })
+            }
+
+            return projectedWeeks
+          }
+
+          if (typeof module !== "undefined") {
+            module.exports = {
+              bucketFor: bucketFor,
+              builtinFestivalRecords: builtinFestivalRecords,
+              mergeFestivals: mergeFestivals,
+              resolveSchedule: resolveSchedule,
+              applyWeekendRule: applyWeekendRule,
+              projectDay: projectDay,
+              projectWeeks: projectWeeks
+            }
+          }
+          '''.replace("          ", ""), encoding="utf-8")
+
+          Path("components/DayCell.qml").write_text(r'''import QtQuick
+          import qs.Commons
+          import qs.Ui
+          import "../subscriptions/PresentationSettings.js" as PresentationSettings
+
+          Rectangle {
+            id: root
+
+            required property var day
+            required property color foreground
+            required property string fontFamily
+            required property int cellWidth
+            required property int cellHeight
+            required property color restColor
+            required property color workColor
+            required property color conflictColor
+
+            signal activated(var day)
+
+            width: cellWidth
+            height: cellHeight
+            radius: Style.cornerRadius
+            color: mouse.containsMouse
+              ? Style.hoverFillFor(root.foreground, Color.accent)
+              : "transparent"
+            border.width: day.today ? Style.spacing.hairline : 0
+            border.color: Style.normalBorderFor(root.foreground, Color.accent)
+
+            function badgeFill() {
+              var role = day.presentation ? day.presentation.badgeRole : ""
+              if (role === "off") return root.restColor
+              if (role === "work") return root.workColor
+              if (role === "conflict") return root.conflictColor
+              return Style.selectedFillFor(root.foreground, Color.accent)
+            }
+
+            function badgeTextColor() {
+              var fill = root.badgeFill()
+              return PresentationSettings.contrastTextForRgb(fill.r, fill.g, fill.b)
+            }
+
+            function dateColor() {
+              if (!day.inMonth) return Qt.darker(root.foreground, 2.2)
+              var type = day.presentation ? day.presentation.effectiveDayType : (day.weekend ? "weekend" : "weekday")
+              if (type === "official-off" || type === "weekend-off") return root.restColor
+              if (type === "makeup-work") return root.workColor
+              if (type === "schedule-conflict") return root.conflictColor
+              return type === "weekend" ? Qt.darker(root.foreground, 1.45) : root.foreground
+            }
+
+            Column {
+              anchors.centerIn: parent
+              width: parent.width - Style.space(4)
+              spacing: Style.space(1)
+
+              Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: root.day.day
+                color: root.dateColor()
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: root.day.today || (root.day.presentation && root.day.presentation.effectiveDayType === "makeup-work")
+              }
+
+              Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                text: root.day.presentation ? root.day.presentation.caption : ""
+                color: root.day.inMonth
+                  ? Qt.darker(root.foreground, 1.7)
+                  : Qt.darker(root.foreground, 2.4)
+                font.family: root.fontFamily
+                font.pixelSize: Math.max(8, Style.font.caption - 1)
+              }
+
+              Row {
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Style.space(2)
+                visible: root.day.inMonth && root.day.presentation && root.day.presentation.eventDotCount > 0
+
+                Repeater {
+                  model: root.day.presentation ? root.day.presentation.eventDotCount : 0
+
+                  Rectangle {
+                    width: Style.space(3)
+                    height: width
+                    radius: width / 2
+                    color: Style.selectedStateColor(root.foreground, Color.accent)
+                  }
+                }
+              }
+            }
+
+            Rectangle {
+              visible: root.day.inMonth && root.day.presentation && root.day.presentation.badgeText !== ""
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.rightMargin: Style.space(3)
+              anchors.topMargin: Style.space(2)
+              width: Style.space(14)
+              height: Style.space(14)
+              radius: height / 2
+              color: root.badgeFill()
+
+              Text {
+                anchors.centerIn: parent
+                text: root.day.presentation ? root.day.presentation.badgeText : ""
+                color: root.badgeTextColor()
+                font.family: root.fontFamily
+                font.pixelSize: Math.max(8, Style.font.caption - 2)
+                font.bold: true
+              }
+            }
+
+            MouseArea {
+              id: mouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.activated(root.day)
+            }
+          }
+          '''.replace("          ", ""), encoding="utf-8")
+
+          # Panel wiring, weekend toggles, and in-panel color editor.
+          panel_path = Path("Panel.qml")
+          panel = panel_path.read_text(encoding="utf-8")
+          panel = replace_once(
+              panel,
+              'import "subscriptions/Projection.js" as Projection\nimport "components" as Components\n',
+              'import "subscriptions/Projection.js" as Projection\nimport "subscriptions/PresentationSettings.js" as PresentationSettings\nimport "components" as Components\n',
+              "Panel PresentationSettings import",
+          )
+          panel = replace_once(
+              panel,
+              '''  readonly property bool showSubscriptions: setting("showSubscriptions", true) !== false
+  readonly property var langCfg: Model.langConfig(root.language)
+''',
+              '''  readonly property bool showSubscriptions: setting("showSubscriptions", true) !== false
+  readonly property bool saturdayIsRest: setting("saturdayIsRest", false) === true
+  readonly property bool sundayIsRest: setting("sundayIsRest", false) === true
+  readonly property string restBadgeColorSetting: PresentationSettings.normalizeColorSetting(setting("restBadgeColor", "auto"))
+  readonly property string workBadgeColorSetting: PresentationSettings.normalizeColorSetting(setting("workBadgeColor", "auto"))
+  readonly property bool darkPopupTheme: PresentationSettings.isDarkRgb(
+    Color.popups.background.r,
+    Color.popups.background.g,
+    Color.popups.background.b
+  )
+  readonly property color restBadgeFill: PresentationSettings.resolveColor(root.restBadgeColorSetting, "rest", root.darkPopupTheme)
+  readonly property color workBadgeFill: PresentationSettings.resolveColor(root.workBadgeColorSetting, "work", root.darkPopupTheme)
+  readonly property color conflictBadgeFill: PresentationSettings.resolveColor("auto", "conflict", root.darkPopupTheme)
+  readonly property var langCfg: Model.langConfig(root.language)
+''',
+              "Panel schedule presentation properties",
+          )
+          panel = replace_once(
+              panel,
+              '''  property string selectedDayKey: ""
+  property var selectedDay: null
+''',
+              '''  property string selectedDayKey: ""
+  property var selectedDay: null
+  property string badgeColorError: ""
+''',
+              "Panel color error state",
+          )
+          panel = replace_once(
+              panel,
+              '''  readonly property var weeks: Projection.projectWeeks(
+      Model.monthGrid(viewYear, viewMonth, weekStart, todayKey),
+      root.subscriptionSnapshot,
+      root.language,
+      root.showJieqi,
+      Model
+    )
+''',
+              '''  readonly property var weeks: Projection.projectWeeks(
+      Model.monthGrid(viewYear, viewMonth, weekStart, todayKey),
+      root.subscriptionSnapshot,
+      root.language,
+      root.showJieqi,
+      ({
+        saturdayIsRest: root.saturdayIsRest,
+        sundayIsRest: root.sundayIsRest
+      }),
+      Model
+    )
+''',
+              "Panel projection options",
+          )
+          panel = replace_once(
+              panel,
+              '''  function openOptions() {
+    root.showingOptions = true
+    Qt.callLater(function() { if (optionsFocus) optionsFocus.forceActiveFocus() })
+  }
+''',
+              '''  function openOptions() {
+    root.showingOptions = true
+    root.badgeColorError = ""
+    Qt.callLater(function() {
+      if (restBadgeColorField) restBadgeColorField.text = root.restBadgeColorSetting
+      if (workBadgeColorField) workBadgeColorField.text = root.workBadgeColorSetting
+      if (optionsFocus) optionsFocus.forceActiveFocus()
+    })
+  }
+''',
+              "Panel openOptions",
+          )
+          panel = replace_once(
+              panel,
+              '''  function setShowSubscriptions(value) {
+    persistSettings({ showSubscriptions: !!value })
+  }
+
+  function openSubscriptionSettings() {
+''',
+              '''  function setShowSubscriptions(value) {
+    persistSettings({ showSubscriptions: !!value })
+  }
+
+  function setSaturdayIsRest(value) {
+    persistSettings({ saturdayIsRest: !!value })
+  }
+
+  function setSundayIsRest(value) {
+    persistSettings({ sundayIsRest: !!value })
+  }
+
+  function badgeColorSetting(key) {
+    return key === "restBadgeColor" ? root.restBadgeColorSetting : root.workBadgeColorSetting
+  }
+
+  function commitBadgeColor(key, field) {
+    var value = String(field ? field.text : "").trim()
+    if (!PresentationSettings.isValidColorSetting(value)) {
+      root.badgeColorError = root.language === "en"
+        ? "Use auto or a #RRGGBB color."
+        : (root.language === "zh-Hant" ? "請輸入 auto 或 #RRGGBB 色彩。" : "请输入 auto 或 #RRGGBB 颜色。")
+      if (field) field.text = root.badgeColorSetting(key)
+      return
+    }
+    var normalized = PresentationSettings.normalizeColorSetting(value)
+    var next = ({})
+    next[key] = normalized
+    root.persistSettings(next)
+    root.badgeColorError = ""
+    if (field) field.text = normalized
+  }
+
+  function resetBadgeColors() {
+    root.persistSettings({ restBadgeColor: "auto", workBadgeColor: "auto" })
+    root.badgeColorError = ""
+    if (restBadgeColorField) restBadgeColorField.text = "auto"
+    if (workBadgeColorField) workBadgeColorField.text = "auto"
+  }
+
+  function openSubscriptionSettings() {
+''',
+              "Panel schedule setting functions",
+          )
+          panel = replace_once(
+              panel,
+              '''                      cellWidth: root.cellWidth
+                      cellHeight: root.cellHeight
+                      onActivated: function(day) { root.openDayDetails(day) }
+''',
+              '''                      cellWidth: root.cellWidth
+                      cellHeight: root.cellHeight
+                      restColor: root.restBadgeFill
+                      workColor: root.workBadgeFill
+                      conflictColor: root.conflictBadgeFill
+                      onActivated: function(day) { root.openDayDetails(day) }
+''',
+              "DayCell palette wiring",
+          )
+          panel = replace_once(
+              panel,
+              '''        language: root.language
+        foreground: root.contentForeground
+        fontFamily: root.contentFontFamily
+        onCloseRequested: root.closeDayDetails()
+''',
+              '''        language: root.language
+        foreground: root.contentForeground
+        fontFamily: root.contentFontFamily
+        restColor: root.restBadgeFill
+        workColor: root.workBadgeFill
+        conflictColor: root.conflictBadgeFill
+        onCloseRequested: root.closeDayDetails()
+''',
+              "DayDetails palette wiring",
+          )
+
+          show_toggle = '''              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Show subscriptions" : (root.language === "zh-Hant" ? "顯示訂閱資料" : "显示订阅数据")
+                description: root.language === "en"
+                  ? "Render work schedules, festivals, and events from the typed snapshot"
+                  : (root.language === "zh-Hant" ? "顯示班休、節日與事件" : "显示班休、节日与事件")
+                checked: root.showSubscriptions
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setShowSubscriptions(!root.showSubscriptions)
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+'''
+          presentation_controls = '''              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Show subscriptions" : (root.language === "zh-Hant" ? "顯示訂閱資料" : "显示订阅数据")
+                description: root.language === "en"
+                  ? "Render work schedules, festivals, and events from the typed snapshot"
+                  : (root.language === "zh-Hant" ? "顯示班休、節日與事件" : "显示班休、节日与事件")
+                checked: root.showSubscriptions
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setShowSubscriptions(!root.showSubscriptions)
+              }
+
+              PanelSeparator { foreground: root.contentForeground }
+
+              Text {
+                text: root.language === "en" ? "Work / rest display" : (root.language === "zh-Hant" ? "班休顯示" : "班休显示")
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.subtitle
+                font.bold: true
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Saturday is always rest" : (root.language === "zh-Hant" ? "週六固定休息" : "周六固定休息")
+                description: root.language === "en"
+                  ? "Every Saturday shows 休 and overrides a subscribed 班 record."
+                  : (root.language === "zh-Hant" ? "所有週六顯示「休」，並覆蓋訂閱中的「班」。" : "所有周六显示“休”，并覆盖订阅中的“班”。")
+                checked: root.saturdayIsRest
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setSaturdayIsRest(!root.saturdayIsRest)
+              }
+
+              Toggle {
+                width: parent.width
+                label: root.language === "en" ? "Sunday is always rest" : (root.language === "zh-Hant" ? "週日固定休息" : "周日固定休息")
+                description: root.language === "en"
+                  ? "Every Sunday shows 休 and overrides a subscribed 班 record."
+                  : (root.language === "zh-Hant" ? "所有週日顯示「休」，並覆蓋訂閱中的「班」。" : "所有周日显示“休”，并覆盖订阅中的“班”。")
+                checked: root.sundayIsRest
+                foreground: root.contentForeground
+                fontFamily: root.contentFontFamily
+                onClicked: root.setSundayIsRest(!root.sundayIsRest)
+              }
+
+              Text {
+                width: parent.width
+                text: root.language === "en"
+                  ? "Badge colors accept auto or #RRGGBB. Auto uses different accessible colors for light and dark themes."
+                  : (root.language === "zh-Hant" ? "角標色彩可填 auto 或 #RRGGBB；auto 會依亮色／暗色主題套用合適預設。" : "角标颜色可填 auto 或 #RRGGBB；auto 会按亮色/暗色主题使用合理默认值。")
+                color: Qt.darker(root.contentForeground, 1.45)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Column {
+                  width: Math.floor((parent.width - parent.spacing) / 2)
+                  spacing: Style.spacing.labelGap
+
+                  Text {
+                    text: root.language === "en" ? "Rest color" : (root.language === "zh-Hant" ? "休色彩" : "休颜色")
+                    color: Qt.darker(root.contentForeground, 1.35)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Rectangle {
+                      width: Style.space(24)
+                      height: Style.space(24)
+                      radius: Style.cornerRadius
+                      color: root.restBadgeFill
+                    }
+
+                    TextField {
+                      id: restBadgeColorField
+                      width: parent.width - Style.space(24) - parent.spacing
+                      placeholderText: "auto"
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      onEditingFinished: root.commitBadgeColor("restBadgeColor", restBadgeColorField)
+                    }
+                  }
+                }
+
+                Column {
+                  width: Math.floor((parent.width - parent.spacing) / 2)
+                  spacing: Style.spacing.labelGap
+
+                  Text {
+                    text: root.language === "en" ? "Work color" : (root.language === "zh-Hant" ? "班色彩" : "班颜色")
+                    color: Qt.darker(root.contentForeground, 1.35)
+                    font.family: root.contentFontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(6)
+
+                    Rectangle {
+                      width: Style.space(24)
+                      height: Style.space(24)
+                      radius: Style.cornerRadius
+                      color: root.workBadgeFill
+                    }
+
+                    TextField {
+                      id: workBadgeColorField
+                      width: parent.width - Style.space(24) - parent.spacing
+                      placeholderText: "auto"
+                      foreground: root.contentForeground
+                      font.family: root.contentFontFamily
+                      onEditingFinished: root.commitBadgeColor("workBadgeColor", workBadgeColorField)
+                    }
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                Button {
+                  text: root.language === "en" ? "Use automatic colors" : (root.language === "zh-Hant" ? "使用自動配色" : "使用自动配色")
+                  foreground: root.contentForeground
+                  fontFamily: root.contentFontFamily
+                  focusable: true
+                  bordered: true
+                  onClicked: root.resetBadgeColors()
+                }
+
+                Text {
+                  width: parent.width - parent.children[0].width - parent.spacing
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: root.badgeColorError !== ""
+                  text: root.badgeColorError
+                  color: root.conflictBadgeFill
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
+
+              PanelSeparator { foreground: root.contentForeground }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
+'''
+          panel = replace_once(panel, show_toggle, presentation_controls, "Panel work/rest options")
+          panel_path.write_text(panel, encoding="utf-8")
+
+          # Day-details colors and transparent weekend override disclosure.
+          details_path = Path("components/DayDetailsOverlay.qml")
+          details = details_path.read_text(encoding="utf-8")
+          details = replace_once(
+              details,
+              '''  required property color foreground
+  required property string fontFamily
+''',
+              '''  required property color foreground
+  required property string fontFamily
+  required property color restColor
+  required property color workColor
+  required property color conflictColor
+''',
+              "DayDetails palette properties",
+          )
+          old_source = '''  function scheduleSourceLine() {
+    if (!day || !day.schedule) return ""
+    var schedule = day.schedule
+    if (schedule.conflict && schedule.candidates) {
+      var parts = []
+      for (var i = 0; i < schedule.candidates.length; i++) {
+        var candidate = schedule.candidates[i] || {}
+        var payload = candidate.payload || {}
+        var state = payload.status === "off" ? tr("休", "休", "off") : tr("班", "班", "work")
+        parts.push(String(candidate.sourceId || "?") + "=" + state)
+      }
+      return parts.join(" · ")
+    }
+    return schedule.sourceId
+      ? tr("来源：", "來源：", "Source: ") + schedule.sourceId
+      : ""
+  }
+'''
+          new_source = '''  function scheduleSourceLine() {
+    if (!day || !day.schedule) return ""
+    var schedule = day.schedule
+    if (schedule.weekendOverride) {
+      var line = tr("本地周末规则", "本地週末規則", "Local weekend rule")
+      var overridden = schedule.overriddenSchedule
+      if (overridden) {
+        var state = overridden.status === "off"
+          ? tr("休", "休", "off")
+          : overridden.status === "work"
+            ? tr("班", "班", "work")
+            : tr("冲突", "衝突", "conflict")
+        line += tr(" · 已覆盖订阅：", " · 已覆蓋訂閱：", " · Overrides subscribed: ") + state
+        if (overridden.title) line += " · " + overridden.title
+      }
+      return line
+    }
+    if (schedule.conflict && schedule.candidates) {
+      var parts = []
+      for (var i = 0; i < schedule.candidates.length; i++) {
+        var candidate = schedule.candidates[i] || {}
+        var payload = candidate.payload || {}
+        var state = payload.status === "off" ? tr("休", "休", "off") : tr("班", "班", "work")
+        parts.push(String(candidate.sourceId || "?") + "=" + state)
+      }
+      return parts.join(" · ")
+    }
+    return schedule.sourceId
+      ? tr("来源：", "來源：", "Source: ") + schedule.sourceId
+      : ""
+  }
+
+  function scheduleColor() {
+    if (!day || !day.schedule) return foreground
+    if (day.schedule.status === "off") return restColor
+    if (day.schedule.status === "work") return workColor
+    return conflictColor
+  }
+'''
+          details = replace_once(details, old_source, new_source, "DayDetails weekend source")
+          details = replace_once(
+              details,
+              '            color: Style.selectedStateColor(root.foreground, Color.accent)\n',
+              '            color: root.scheduleColor()\n',
+              "DayDetails status color",
+          )
+          details_path.write_text(details, encoding="utf-8")
+
+          # Documentation.
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+          readme = replace_once(
+              readme,
+              '''- Typed subscription overlays keep work schedules (`休` / `班`), cultural
+  festivals, and calendar events in separate rendering channels.
+''',
+              '''- Typed subscription overlays keep work schedules (`休` / `班`), cultural
+  festivals, and calendar events in separate rendering channels.
+- `休` and `班` colors support theme-aware `auto` defaults or custom
+  `#RRGGBB` values; badge text contrast is selected automatically.
+- Independent Saturday/Sunday rules can force every selected weekday to `休`,
+  retaining any overridden subscribed `班` record in the day-details view.
+''',
+              "README feature bullets",
+          )
+          readme = replace_once(
+              readme,
+              '''Use Omarchy's native Widget Settings for the official holiday URL and basic
+automatic-update policy. For multiple sources, open the calendar and click the
+''',
+              '''Use Omarchy's native Widget Settings for the official holiday URL, automatic
+update policy, Saturday/Sunday rest overrides, and `休` / `班` colors. The same
+weekend and color controls are available in the calendar's gear menu. For
+multiple sources, open the calendar and click the
+''',
+              "README native settings description",
+          )
+          readme_path.write_text(readme, encoding="utf-8")
+
+          # Tests.
+          Path("tests/projection.test.js").write_text(r'''const assert = require('assert')
+          const Projection = require('../subscriptions/Projection.js')
+
+          const model = {
+            computeLunarInfo(year, month, day) {
+              if (year === 2026 && month === 2 && day === 17) {
+                return { lunarYear: 2026, lunarMonth: 1, lunarDay: 1, isLeap: false, festivalKey: '1-1', isEve: false, solarTermIndex: null }
+              }
+              return { lunarYear: 2026, lunarMonth: 1, lunarDay: day, isLeap: false, festivalKey: null, isEve: false, solarTermIndex: null }
+            },
+            langConfig() {
+              return {
+                festivals: { '1-1': '春节' },
+                eveName: '除夕',
+                solarTerms: [],
+                leapWord: '闰',
+                monthNames: ['正'],
+                monthWord: '月',
+                dayNames: Array.from({ length: 30 }, (_, i) => `初${i + 1}`)
+              }
+            }
+          }
+
+          const cell = {
+            key: '2026-02-17',
+            year: 2026,
+            month: 1,
+            day: 17,
+            weekday: 2,
+            inMonth: true,
+            weekend: false,
+            today: false
+          }
+
+          const snapshot = {
+            schemaVersion: 1,
+            byDate: {
+              '2026-02-17': {
+                schedule: [
+                  { id: 'off', sourceId: 'official', kind: 'schedule', title: '春节', priority: 100, payload: { status: 'off' } }
+                ],
+                festivals: [
+                  { id: 'remote-spring', sourceId: 'remote', kind: 'festival', title: '春节活动', priority: 50, payload: { festivalId: 'cn.spring-festival' } }
+                ],
+                events: [
+                  { id: 'dinner', sourceId: 'personal', kind: 'event', title: '家庭聚餐', priority: 0, span: { mode: 'datetime', start: '2026-02-17T18:00:00+08:00', end: '2026-02-17T20:00:00+08:00' } }
+                ]
+              }
+            }
+          }
+
+          const projected = Projection.projectDay(cell, snapshot, 'zh-Hans', true, model)
+          assert.strictEqual(projected.schedule.status, 'off')
+          assert.strictEqual(projected.presentation.badgeText, '休')
+          assert.strictEqual(projected.presentation.effectiveDayType, 'official-off')
+          assert.strictEqual(projected.presentation.caption, '春节')
+          assert.strictEqual(projected.events.length, 1)
+          assert.strictEqual(projected.presentation.eventDotCount, 1)
+          assert.strictEqual(projected.festivals.length, 1, 'canonical festival id deduplicates local and remote records')
+
+          const saturdayCell = { ...cell, key: '2026-02-14', day: 14, weekday: 6, weekend: true }
+          const saturdaySnapshot = {
+            schemaVersion: 1,
+            byDate: {
+              '2026-02-14': {
+                schedule: [{ id: 'work', kind: 'schedule', title: '春节补班', priority: 100, payload: { status: 'work' } }],
+                festivals: [],
+                events: []
+              }
+            }
+          }
+
+          const workSaturday = Projection.projectDay(saturdayCell, saturdaySnapshot, 'zh-Hans', true, model)
+          assert.strictEqual(workSaturday.presentation.effectiveDayType, 'makeup-work')
+          assert.strictEqual(workSaturday.presentation.badgeText, '班')
+
+          const overriddenSaturday = Projection.projectDay(
+            saturdayCell,
+            saturdaySnapshot,
+            'zh-Hans',
+            true,
+            { saturdayIsRest: true },
+            model
+          )
+          assert.strictEqual(overriddenSaturday.schedule.status, 'off')
+          assert.strictEqual(overriddenSaturday.schedule.weekendOverride, true)
+          assert.strictEqual(overriddenSaturday.schedule.overriddenSchedule.status, 'work')
+          assert.strictEqual(overriddenSaturday.presentation.effectiveDayType, 'weekend-off')
+          assert.strictEqual(overriddenSaturday.presentation.badgeText, '休')
+
+          const sunday = Projection.projectDay(
+            { ...cell, key: '2026-02-15', day: 15, weekday: 0, weekend: true },
+            { schemaVersion: 1, byDate: {} },
+            'zh-Hans',
+            true,
+            { sundayIsRest: true },
+            model
+          )
+          assert.strictEqual(sunday.schedule.status, 'off')
+          assert.strictEqual(sunday.schedule.title, '周日休息')
+          assert.strictEqual(sunday.presentation.badgeText, '休')
+
+          const conflict = Projection.resolveSchedule([
+            { id: 'a', priority: 100, payload: { status: 'off' } },
+            { id: 'b', priority: 100, payload: { status: 'work' } }
+          ])
+          assert.strictEqual(conflict.status, 'conflict')
+          assert.strictEqual(conflict.badge, '!')
+
+          console.log('projection tests passed')
+          '''.replace("          ", ""), encoding="utf-8")
+
+          Path("tests/presentation_settings.test.js").write_text(r'''const assert = require('assert')
+          const Presentation = require('../subscriptions/PresentationSettings.js')
+
+          assert.strictEqual(Presentation.normalizeColorSetting(''), 'auto')
+          assert.strictEqual(Presentation.normalizeColorSetting(' AUTO '), 'auto')
+          assert.strictEqual(Presentation.normalizeColorSetting('#c62828'), '#C62828')
+          assert.strictEqual(Presentation.normalizeColorSetting('red'), 'auto')
+          assert.strictEqual(Presentation.isValidColorSetting('#123ABC'), true)
+          assert.strictEqual(Presentation.isValidColorSetting('#1234'), false)
+
+          assert.strictEqual(Presentation.resolveColor('auto', 'rest', false), '#C62828')
+          assert.strictEqual(Presentation.resolveColor('auto', 'rest', true), '#F87171')
+          assert.strictEqual(Presentation.resolveColor('#112233', 'work', false), '#112233')
+          assert.notStrictEqual(
+            Presentation.resolveColor('auto', 'work', false),
+            Presentation.resolveColor('auto', 'work', true)
+          )
+
+          assert.strictEqual(Presentation.isDarkRgb(0.05, 0.05, 0.05), true)
+          assert.strictEqual(Presentation.isDarkRgb(0.95, 0.95, 0.95), false)
+          assert.strictEqual(Presentation.contrastTextForRgb(0.05, 0.05, 0.05), '#FFFFFF')
+          assert.strictEqual(Presentation.contrastTextForRgb(0.95, 0.95, 0.95), '#111827')
+
+          console.log('presentation settings tests passed')
+          '''.replace("          ", ""), encoding="utf-8")
+
+          run_path = Path("tests/run.sh")
+          run = run_path.read_text(encoding="utf-8")
+          if "node tests/presentation_settings.test.js" not in run:
+              run = run.replace("node tests/projection.test.js\n", "node tests/projection.test.js\nnode tests/presentation_settings.test.js\n", 1)
+          run_path.write_text(run, encoding="utf-8")
+          PY
+
+      - name: Remove one-shot tooling
+        run: |
+          rm -f .github/workflows/apply-weekend-palette.yml
+          rmdir .github/workflows 2>/dev/null || true
+          rmdir .github 2>/dev/null || true
+
+      - name: Validate changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./tests/run.sh
+          python3 -m json.tool manifest.json >/dev/null
+          grep -q '"version": "1.4.0"' manifest.json
+          grep -q '"saturdayIsRest"' manifest.json
+          grep -q '"restBadgeColor"' manifest.json
+          grep -q 'text: root.language === "en" ? "Subscriptions"' Panel.qml
+          grep -q 'weekendOverride' subscriptions/Projection.js
+          grep -q 'PresentationSettings' components/DayCell.qml
+          git diff --check
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Jeff Li"
+          git config user.email "laojianzi1994@gmail.com"
+          git add -A
+          git commit -m "feat: add weekend overrides and configurable schedule colors"
+          git push origin HEAD:fix/native-subscription-settings
