@@ -2,6 +2,7 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 import "../subscriptions/PresentationSettings.js" as PresentationSettings
+import "../subscriptions/MonthWindow.js" as MonthWindow
 
 Rectangle {
   id: root
@@ -16,6 +17,8 @@ Rectangle {
   required property color conflictColor
 
   signal activated(var day)
+
+  readonly property var emphasis: MonthWindow.emphasisForDay(root.day)
 
   width: cellWidth
   height: cellHeight
@@ -40,7 +43,6 @@ Rectangle {
   }
 
   function dateColor() {
-    if (!day.inMonth) return Qt.darker(root.foreground, 2.2)
     var type = day.presentation ? day.presentation.effectiveDayType : "weekday"
     if (type === "regular-rest" || type === "scheduled-rest" || type === "official-off")
       return root.restColor
@@ -59,6 +61,7 @@ Rectangle {
       horizontalAlignment: Text.AlignHCenter
       text: root.day.day
       color: root.dateColor()
+      opacity: root.emphasis.dateOpacity
       font.family: root.fontFamily
       font.pixelSize: Style.font.body
       font.bold: root.day.today || (root.day.presentation && root.day.presentation.badgeRole === "work")
@@ -71,9 +74,8 @@ Rectangle {
       maximumLineCount: 2
       elide: Text.ElideRight
       text: root.day.presentation ? root.day.presentation.caption : ""
-      color: root.day.inMonth
-        ? Qt.darker(root.foreground, 1.7)
-        : Qt.darker(root.foreground, 2.4)
+      color: root.foreground
+      opacity: root.emphasis.captionOpacity
       font.family: root.fontFamily
       font.pixelSize: Math.max(8, Style.font.caption - 1)
     }
@@ -81,7 +83,8 @@ Rectangle {
     Row {
       anchors.horizontalCenter: parent.horizontalCenter
       spacing: Style.space(2)
-      visible: root.day.inMonth && root.day.presentation && root.day.presentation.eventDotCount > 0
+      visible: root.emphasis.showEvents
+      opacity: root.emphasis.eventOpacity
 
       Repeater {
         model: root.day.presentation ? root.day.presentation.eventDotCount : 0
@@ -97,7 +100,8 @@ Rectangle {
   }
 
   Rectangle {
-    visible: root.day.inMonth && root.day.presentation && root.day.presentation.badgeText !== ""
+    visible: root.emphasis.showBadge
+    opacity: root.emphasis.badgeOpacity
     anchors.right: parent.right
     anchors.top: parent.top
     anchors.rightMargin: Style.space(3)

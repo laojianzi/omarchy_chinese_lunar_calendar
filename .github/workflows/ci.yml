@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run project tests
+        run: ./tests/run.sh
+
+      - name: Validate schemas and month-window contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool manifest.json >/dev/null
+          while IFS= read -r -d '' file; do
+            python3 -m json.tool "$file" >/dev/null
+          done < <(find schemas examples tests/fixtures -name '*.json' -print0)
+          node --check subscriptions/Projection.js
+          node --check subscriptions/MonthWindow.js
+          grep -q 'MonthWindow.emphasisForDay' components/DayCell.qml
+          grep -q 'monthScope' subscriptions/Projection.js
+          ! grep -q 'visible: root.day.inMonth &&' components/DayCell.qml
+          git diff --check
