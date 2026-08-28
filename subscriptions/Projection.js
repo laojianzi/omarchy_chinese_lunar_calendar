@@ -24,6 +24,17 @@ var FESTIVAL_IDS = {
   "12-23": "cn.little-new-year"
 }
 
+var DEFAULT_FESTIVAL_CATALOG = null
+if (typeof module !== "undefined" && typeof require === "function")
+  DEFAULT_FESTIVAL_CATALOG = require("./FestivalCatalog.js")
+
+function resolvedFestivalCatalog(catalog) {
+  var provider = catalog || DEFAULT_FESTIVAL_CATALOG
+  if (!provider || typeof provider.recordsForDate !== "function" || typeof provider.mergeRecords !== "function")
+    return null
+  return provider
+}
+
 function array(value) {
   return Array.isArray(value) ? value : []
 }
@@ -68,7 +79,7 @@ function bucketFor(snapshot, key) {
   }
 }
 
-function builtinFestivalRecords(lunarInfo, language, model) {
+function legacyBuiltinFestivalRecords(lunarInfo, language, model) {
   if (!lunarInfo || !model) return []
   var cfg = model.langConfig(language)
   var records = []
@@ -104,12 +115,18 @@ function builtinFestivalRecords(lunarInfo, language, model) {
   return records
 }
 
+function builtinFestivalRecords(cell, lunarInfo, language, model, catalog) {
+  var provider = resolvedFestivalCatalog(catalog)
+  if (provider) return provider.recordsForDate(cell, lunarInfo, language)
+  return legacyBuiltinFestivalRecords(lunarInfo, language, model)
+}
+
 function festivalKey(record) {
   var payload = record && record.payload ? record.payload : {}
   return String(payload.festivalId || record.id || (record.sourceId + ":" + record.title))
 }
 
-function mergeFestivals(builtin, subscribed) {
+function legacyMergeFestivals(builtin, subscribed) {
   var merged = []
   var byKey = {}
   var all = array(builtin).concat(array(subscribed))
@@ -125,6 +142,12 @@ function mergeFestivals(builtin, subscribed) {
   for (var id in byKey) merged.push(copyRecord(byKey[id]))
   merged.sort(compareRecords)
   return merged
+}
+
+function mergeFestivals(builtin, subscribed, catalog) {
+  var provider = resolvedFestivalCatalog(catalog)
+  if (provider) return provider.mergeRecords(builtin, subscribed)
+  return legacyMergeFestivals(builtin, subscribed)
 }
 
 function scheduleStatus(record) {
@@ -190,6 +213,23 @@ function chooseCaption(festivals, lunarInfo, language, showJieqi, model) {
   return lunarFallbackCaption(lunarInfo, language, showJieqi, model)
 }
 
+function festivalIdForRecord(record, catalog) {
+  var provider = resolvedFestivalCatalog(catalog)
+  if (provider && typeof provider.festivalId === "function") return provider.festivalId(record)
+  var payload = record && record.payload ? record.payload : {}
+  return String(payload.festivalId || "")
+}
+
+function containsFestivalId(records, festivalId, catalog) {
+  var provider = resolvedFestivalCatalog(catalog)
+  if (provider && typeof provider.containsFestivalId === "function")
+    return provider.containsFestivalId(records, festivalId)
+  var id = String(festivalId || "")
+  var list = array(records)
+  for (var i = 0; i < list.length; i++) if (festivalIdForRecord(list[i], catalog) === id) return true
+  return false
+}
+
 function eventStartKey(record) {
   var span = record && record.span ? record.span : {}
   return String(span.start || "")
@@ -212,10 +252,14 @@ function sortEvents(events) {
   return out
 }
 
-function projectionArgs(options, model) {
+function projectionArgs(options, model, catalog) {
   if (!model && options && typeof options.computeLunarInfo === "function")
-    return { options: {}, model: options }
-  return { options: options && typeof options === "object" ? options : {}, model: model }
+    return { options: {}, model: options, catalog: resolvedFestivalCatalog(catalog) }
+  return {
+    options: options && typeof options === "object" ? options : {},
+    model: model,
+    catalog: resolvedFestivalCatalog(catalog)
+  }
 }
 
 // Saturday/Sunday settings describe the ordinary weekly schedule. They are
@@ -287,18 +331,24 @@ function monthScope(cell) {
   return cell && cell.inMonth === false ? "adjacent-month" : "current-month"
 }
 
-function projectDay(cell, snapshot, language, showJieqi, options, model) {
-  var args = projectionArgs(options, model)
+function projectDay(cell, snapshot, language, showJieqi, options, model, catalog) {
+  var args = projectionArgs(options, model, catalog)
   var projectionOptions = args.options
   var calendarModel = args.model
   var bucket = bucketFor(snapshot, cell.key)
   var lunarInfo = calendarModel.computeLunarInfo(cell.year, cell.month + 1, cell.day)
   var festivals = mergeFestivals(
-    builtinFestivalRecords(lunarInfo, language, calendarModel),
-    bucket.festivals
+    builtinFestivalRecords(cell, lunarInfo, language, calendarModel, args.catalog),
+    bucket.festivals,
+    args.catalog
   )
   var basePolicy = baseWeekPolicy(cell, projectionOptions, language)
   var schedule = resolveSchedule(bucket.schedule)
+  var relatedFestivalId = ""
+  if (schedule && args.catalog && typeof args.catalog.canonicalHolidayIdForSchedule === "function") {
+    relatedFestivalId = args.catalog.canonicalHolidayIdForSchedule(schedule)
+    if (relatedFestivalId) schedule.relatedFestivalId = relatedFestivalId
+  }
   var transition = scheduleTransition(basePolicy, schedule)
   var badge = effectiveBadge(basePolicy, schedule)
   var events = sortEvents(bucket.events)
@@ -321,6 +371,10 @@ function projectDay(cell, snapshot, language, showJieqi, options, model) {
     scheduleOrigin: badge.origin,
     changesBase: transition === "rest-to-work" || transition === "work-to-rest",
     caption: chooseCaption(festivals, lunarInfo, language, showJieqi, calendarModel),
+    festivalCount: festivals.length,
+    primaryFestivalId: festivals.length > 0 ? festivalIdForRecord(festivals[0], args.catalog) : "",
+    scheduleRelatedFestivalId: relatedFestivalId,
+    scheduleHasVisibleFestival: containsFestivalId(festivals, relatedFestivalId, args.catalog),
     badgeText: badge.text,
     badgeRole: badge.role,
     eventCount: events.length,
@@ -329,8 +383,8 @@ function projectDay(cell, snapshot, language, showJieqi, options, model) {
   return projected
 }
 
-function projectWeeks(baseWeeks, snapshot, language, showJieqi, options, model) {
-  var args = projectionArgs(options, model)
+function projectWeeks(baseWeeks, snapshot, language, showJieqi, options, model, catalog) {
+  var args = projectionArgs(options, model, catalog)
   var projectedWeeks = []
   var weeks = array(baseWeeks)
 
@@ -338,7 +392,7 @@ function projectWeeks(baseWeeks, snapshot, language, showJieqi, options, model) 
     var days = []
     var baseDays = array(weeks[w].days)
     for (var d = 0; d < baseDays.length; d++)
-      days.push(projectDay(baseDays[d], snapshot, language, showJieqi, args.options, args.model))
+      days.push(projectDay(baseDays[d], snapshot, language, showJieqi, args.options, args.model, args.catalog))
     projectedWeeks.push({ week: weeks[w].week, days: days })
   }
 
@@ -350,6 +404,8 @@ if (typeof module !== "undefined") {
     bucketFor: bucketFor,
     builtinFestivalRecords: builtinFestivalRecords,
     mergeFestivals: mergeFestivals,
+    festivalIdForRecord: festivalIdForRecord,
+    containsFestivalId: containsFestivalId,
     resolveSchedule: resolveSchedule,
     baseWeekPolicy: baseWeekPolicy,
     scheduleTransition: scheduleTransition,

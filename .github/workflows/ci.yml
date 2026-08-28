@@ -16,7 +16,7 @@ jobs:
       - name: Run project tests
         run: ./tests/run.sh
 
-      - name: Validate schemas and month-window contract
+      - name: Validate schemas and calendar-domain contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -24,9 +24,16 @@ jobs:
           while IFS= read -r -d '' file; do
             python3 -m json.tool "$file" >/dev/null
           done < <(find schemas examples tests/fixtures -name '*.json' -print0)
+          node --check subscriptions/FestivalCatalog.js
           node --check subscriptions/Projection.js
           node --check subscriptions/MonthWindow.js
           grep -q 'MonthWindow.emphasisForDay' components/DayCell.qml
           grep -q 'monthScope' subscriptions/Projection.js
+          grep -q 'resolvedFestivalCatalog' subscriptions/Projection.js
+          grep -q 'FestivalCatalog' Panel.qml
+          grep -q 'FestivalCatalog.metadataLine' components/DayDetailsOverlay.qml
+          grep -q 'cn.new-years-day' subscriptions/FestivalCatalog.js
+          grep -q 'cn.qingming-festival' subscriptions/FestivalCatalog.js
+          grep -q 'cn.national-day' subscriptions/FestivalCatalog.js
           ! grep -q 'visible: root.day.inMonth &&' components/DayCell.qml
           git diff --check

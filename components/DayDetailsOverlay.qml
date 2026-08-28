@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "../subscriptions/FestivalCatalog.js" as FestivalCatalog
 
 Item {
   id: root
@@ -106,6 +107,8 @@ Item {
     var presentation = presentationInfo()
     var transition = presentation ? transitionLabel(String(presentation.scheduleTransition || "")) : ""
     if (transition) parts.push(transition)
+    var association = root.scheduleAssociationLine()
+    if (association) parts.push(association)
     return parts.join(" · ")
   }
 
@@ -116,6 +119,21 @@ Item {
     if (presentation.badgeRole === "work") return workColor
     if (presentation.badgeRole === "conflict") return conflictColor
     return foreground
+  }
+
+  function festivalMetaLine(record) {
+    return FestivalCatalog.metadataLine(record, root.language)
+  }
+
+  function scheduleAssociationLine() {
+    var presentation = presentationInfo()
+    if (!presentation) return ""
+    var festivalId = String(presentation.scheduleRelatedFestivalId || "")
+    if (!festivalId || presentation.scheduleHasVisibleFestival) return ""
+    var title = FestivalCatalog.titleForId(festivalId, root.language)
+    if (!title) return ""
+    return tr("关联节日：", "關聯節日：", "Related festival: ") + title
+      + tr("（本日为假期安排，不是节日本日）", "（本日為假期安排，不是節日本日）", " (holiday-period date, not the observance date)")
   }
 
   function eventTime(record) {
@@ -221,6 +239,7 @@ Item {
             width: parent.width
             wrapMode: Text.WordWrap
             text: root.workRestStatusLine()
+            textFormat: Text.PlainText
             color: root.scheduleColor()
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -232,6 +251,7 @@ Item {
             visible: text !== ""
             wrapMode: Text.WordWrap
             text: root.scheduleSourceLine()
+            textFormat: Text.PlainText
             color: Qt.darker(root.foreground, 1.5)
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -254,13 +274,32 @@ Item {
           Repeater {
             model: root.day && root.day.festivals ? root.day.festivals : []
 
-            Text {
+            Column {
               required property var modelData
               width: detailColumn.width
-              text: modelData.title || ""
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+              spacing: Style.space(2)
+
+              Text {
+                width: parent.width
+                text: modelData.title || ""
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Text {
+                width: parent.width
+                text: root.festivalMetaLine(modelData)
+                textFormat: Text.PlainText
+                visible: text !== ""
+                wrapMode: Text.WordWrap
+                color: Qt.darker(root.foreground, 1.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
           }
         }
@@ -298,6 +337,7 @@ Item {
                 width: parent.width - Style.space(60)
                 wrapMode: Text.WordWrap
                 text: modelData.title || ""
+                textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall

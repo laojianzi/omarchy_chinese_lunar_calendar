@@ -22,6 +22,10 @@ this plugin adds lunar facts and typed subscription overlays on top.
   weekday/month names).
 - Typed subscription overlays keep work schedules (`休` / `班`), cultural
   festivals, and calendar events in separate rendering channels.
+- A canonical built-in festival catalog covers the seven mainland statutory
+  observances: New Year's Day, Spring Festival, Qingming Festival, Labour Day,
+  Dragon Boat Festival, Mid-Autumn Festival, and National Day, together with
+  the existing traditional lunar observances.
 - The fixed 6×7 month viewport treats all 42 visible dates as first-class
   calendar cells. Leading and trailing dates from adjacent months keep their
   `休` / `班` badges, festival captions, event dots, and click-through details;
@@ -135,6 +139,27 @@ Work/rest state is projected in two stages:
    `off` changes the effective date to `休`; `work` changes it to `班`. A `work`
    record on a base rest day is therefore a real make-up workday, not a weekend
    setting that can be overwritten locally.
+
+### Festival observance versus holiday schedule
+
+A `schedule` record and a `festival` record answer different product questions:
+
+- `schedule` says whether a specific civil date is worked or rested. A holiday
+  schedule can cover several dates and can also contain a weekend make-up day.
+- `festival` identifies the actual observance date. It does not imply that the
+  date is off work by itself.
+
+The projection layer therefore adds deterministic built-in festival records for
+fixed Gregorian observances (January 1, May 1, and October 1), Qingming on the
+actual Qingming solar-term date, and the existing lunar rules. On October 1 the
+detail panel can correctly show both `休` and `国庆节`; on October 2 it shows the
+`国庆节` holiday schedule but does not falsely claim that October 2 is National
+Day. The schedule section labels such dates as related holiday-period dates.
+
+Subscribed festival records with the same canonical `festivalId` are deduplicated
+against the built-in record while source provenance is retained. The details
+panel shows each festival's category, calendar basis, and source separately from
+the work/rest source.
 
 ### Month viewport semantics
 
