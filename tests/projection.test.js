@@ -1,10 +1,14 @@
 const assert = require('assert')
 const Projection = require('../subscriptions/Projection.js')
+const FestivalCatalog = require('../subscriptions/FestivalCatalog.js')
 
 const model = {
   computeLunarInfo(year, month, day) {
     if (year === 2026 && month === 2 && day === 17) {
       return { lunarYear: 2026, lunarMonth: 1, lunarDay: 1, isLeap: false, festivalKey: '1-1', isEve: false, solarTermIndex: null }
+    }
+    if (year === 2026 && month === 4 && day === 5) {
+      return { lunarYear: 2026, lunarMonth: 2, lunarDay: 18, isLeap: false, festivalKey: null, isEve: false, solarTermIndex: 6 }
     }
     return { lunarYear: 2026, lunarMonth: 1, lunarDay: day, isLeap: false, festivalKey: null, isEve: false, solarTermIndex: null }
   },
@@ -291,5 +295,97 @@ const januaryCrossYear = Projection.projectDay(
 assert.strictEqual(januaryCrossYear.presentation.monthScope, 'adjacent-month')
 assert.strictEqual(januaryCrossYear.presentation.badgeText, '休')
 assert.strictEqual(januaryCrossYear.presentation.effectiveDayType, 'official-off')
+
+// Fixed Gregorian statutory observances are festival records even though
+// their work/rest state comes from a separate schedule source.
+const newYearsDay = Projection.projectDay(
+  { ...weekdayCell, key: '2026-01-01', year: 2026, month: 0, day: 1, weekday: 4 },
+  {
+    schemaVersion: 1,
+    byDate: {
+      '2026-01-01': {
+        schedule: [
+          { id: 'new-year-off', sourceId: 'official', kind: 'schedule', title: '元旦', priority: 100, payload: { status: 'off', scope: 'official' } }
+        ],
+        festivals: [],
+        events: []
+      }
+    }
+  },
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model,
+  FestivalCatalog
+)
+assert.strictEqual(newYearsDay.schedule.status, 'off')
+assert.strictEqual(newYearsDay.presentation.badgeText, '休')
+assert.strictEqual(newYearsDay.festivals.length, 1)
+assert.strictEqual(FestivalCatalog.festivalId(newYearsDay.festivals[0]), 'cn.new-years-day')
+assert.strictEqual(newYearsDay.presentation.caption, '元旦')
+assert.strictEqual(newYearsDay.presentation.scheduleRelatedFestivalId, 'cn.new-years-day')
+assert.strictEqual(newYearsDay.presentation.scheduleHasVisibleFestival, true)
+
+// A holiday period can be associated with a festival without falsely marking
+// every vacation day as the observance date.
+const nationalHolidayPeriod = Projection.projectDay(
+  { ...weekdayCell, key: '2026-10-02', year: 2026, month: 9, day: 2, weekday: 5 },
+  {
+    schemaVersion: 1,
+    byDate: {
+      '2026-10-02': {
+        schedule: [
+          { id: 'national-off-2', sourceId: 'official', kind: 'schedule', title: '国庆节', priority: 100, payload: { status: 'off', scope: 'official' } }
+        ],
+        festivals: [],
+        events: []
+      }
+    }
+  },
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model,
+  FestivalCatalog
+)
+assert.strictEqual(nationalHolidayPeriod.festivals.length, 0)
+assert.strictEqual(nationalHolidayPeriod.presentation.scheduleRelatedFestivalId, 'cn.national-day')
+assert.strictEqual(nationalHolidayPeriod.presentation.scheduleHasVisibleFestival, false)
+
+const nationalDay = Projection.projectDay(
+  { ...weekdayCell, key: '2026-10-01', year: 2026, month: 9, day: 1, weekday: 4 },
+  {
+    schemaVersion: 1,
+    byDate: {
+      '2026-10-01': {
+        schedule: [
+          { id: 'national-off-1', sourceId: 'official', kind: 'schedule', title: '国庆节', priority: 100, payload: { status: 'off', scope: 'official' } }
+        ],
+        festivals: [],
+        events: []
+      }
+    }
+  },
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model,
+  FestivalCatalog
+)
+assert.strictEqual(FestivalCatalog.festivalId(nationalDay.festivals[0]), 'cn.national-day')
+assert.strictEqual(nationalDay.presentation.scheduleHasVisibleFestival, true)
+assert.strictEqual(nationalDay.presentation.caption, '国庆节')
+
+const qingmingDay = Projection.projectDay(
+  { ...weekdayCell, key: '2026-04-05', year: 2026, month: 3, day: 5, weekday: 0 },
+  { schemaVersion: 1, byDate: {} },
+  'zh-Hans',
+  true,
+  { saturdayIsRest: true, sundayIsRest: true },
+  model,
+  FestivalCatalog
+)
+assert.strictEqual(FestivalCatalog.festivalId(qingmingDay.festivals[0]), 'cn.qingming-festival')
+assert.strictEqual(qingmingDay.presentation.caption, '清明节')
 
 console.log('projection tests passed')

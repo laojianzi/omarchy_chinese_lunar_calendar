@@ -4,6 +4,7 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 import "subscriptions/Projection.js" as Projection
+import "subscriptions/FestivalCatalog.js" as FestivalCatalog
 import "subscriptions/PresentationSettings.js" as PresentationSettings
 import "components" as Components
 
@@ -90,7 +91,8 @@ Panel {
         saturdayIsRest: root.saturdayIsRest,
         sundayIsRest: root.sundayIsRest
       }),
-      Model
+      Model,
+      FestivalCatalog
     )
 
   onWeeksChanged: {

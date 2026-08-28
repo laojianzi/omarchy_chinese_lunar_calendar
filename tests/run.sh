@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+node tests/festival_catalog.test.js
 node tests/projection.test.js
 node tests/month_window.test.js
 node tests/presentation_settings.test.js
