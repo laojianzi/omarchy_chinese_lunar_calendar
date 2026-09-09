@@ -121,18 +121,26 @@ Panel {
     refresh()
     if (root.subscriptionStore) root.subscriptionStore.refreshIfStale("open")
     root.controller.show()
+    // Showing can close the previous popout, which clears the shared flag.
+    // Apply it after that handoff; a close before this callback must win.
     Qt.callLater(function() {
       if (root.opened) setCenterHoverRevealSuppressed(true)
     })
   }
 
   function close() {
-    setCenterHoverRevealSuppressed(false)
-    if (root.editingLife) root.cancelEditingLife()
-    if (root.showingOptions) root.closeOptions()
-    if (root.showingDayDetails) root.closeDayDetails()
-    if (root.showingSubscriptionSettings) root.closeSubscriptionSettings()
-    root.controller.hide()
+    // Input ownership must be released even if optional host/UI cleanup fails.
+    // Keep suppression cleanup before hide for popout handoffs, and do not
+    // swallow errors: finally releases the panel while the error stays visible.
+    try {
+      setCenterHoverRevealSuppressed(false)
+      if (root.editingLife) root.cancelEditingLife()
+      if (root.showingOptions) root.closeOptions()
+      if (root.showingDayDetails) root.closeDayDetails()
+      if (root.showingSubscriptionSettings) root.closeSubscriptionSettings()
+    } finally {
+      root.controller.hide()
+    }
   }
 
   function toggle() {
@@ -147,8 +155,11 @@ Panel {
   }
 
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
-      root.bar.centerHoverRevealSuppressed = value
+    // Installed widgets receive PluginBarApi, whose state is read-only.
+    // Only the public operation may change it; an absent operation is a no-op.
+    // Do not fall back to assigning a property merely because it exists.
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(!!value)
   }
 
   function refresh() {
