@@ -36,4 +36,20 @@ jobs:
           grep -q 'cn.qingming-festival' subscriptions/FestivalCatalog.js
           grep -q 'cn.national-day' subscriptions/FestivalCatalog.js
           ! grep -q 'visible: root.day.inMonth &&' components/DayCell.qml
+          python3 -m py_compile tests/smoke_panel_lifecycle.py
           git diff --check
+
+  panel-lifecycle-qml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned headless QML test runtime
+        run: python -m pip install PySide6-Essentials==6.8.3
+      - name: Exercise actual lifecycle methods with Qt readonly facade and event loop
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tests/panel_lifecycle_qml_test.py
